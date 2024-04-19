@@ -20,6 +20,7 @@ class FastBEV(BaseDetector):
             backbone,
             neck,
             neck_fuse,
+            view_transformer,
             neck_3d,
             bbox_head,
             n_voxels,
@@ -45,6 +46,7 @@ class FastBEV(BaseDetector):
                     nn.Conv2d(in_channels, out_channels, 3, 1, 1))
         else:
             self.neck_fuse = nn.Conv2d(neck_fuse["in_channels"], neck_fuse["out_channels"], 3, 1, 1)
+        self.view_transformer = build_neck(view_transformer)
 
         self.multi_scale_id = multi_scale_id
         self.multi_scale_3d_scaler = multi_scale_3d_scaler
@@ -126,6 +128,8 @@ class FastBEV(BaseDetector):
                 else:
                     mlvl_feats_.append(mlvl_feats[msid])
             mlvl_feats = mlvl_feats_
+
+        mlvl_feats = self.view_transformer(mlvl_feats)
 
         mlvl_volumes = []
         for lvl, mlvl_feat in enumerate(mlvl_feats):
