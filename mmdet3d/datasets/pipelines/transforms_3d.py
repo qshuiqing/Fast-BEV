@@ -1,28 +1,26 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import os
-import torch
-import numpy as np
-from numpy import random
-import random as prandom
-import warnings
-from PIL import Image
-import string
 import copy
+import os
+import random as prandom
+import string
+import warnings
 
+import cv2
 import mmcv
+import numpy as np
+import torch
+from PIL import Image
 from mmcv import is_tuple_of
 from mmcv.utils import build_from_cfg
-import cv2
+from mmdet.datasets.builder import PIPELINES
+from mmdet.datasets.pipelines import RandomFlip
+from numpy import random
 
 from mmdet3d.core import VoxelGenerator
 from mmdet3d.core.bbox import DepthInstance3DBoxes, LiDARInstance3DBoxes, CameraInstance3DBoxes, box_np_ops
 from mmdet3d.core.visualizer.image_vis import draw_lidar_bbox3d_on_img
-from mmdet.datasets.builder import PIPELINES
-from mmdet.datasets.pipelines import RandomFlip
-from ..builder import OBJECTSAMPLERS
 from .data_augment_utils import noise_per_object_v3_
-
-import ipdb
+from ..builder import OBJECTSAMPLERS
 
 
 @PIPELINES.register_module()
@@ -55,7 +53,7 @@ class RandomDropPointsColor(object):
         """
         points = input_dict['points']
         assert points.attribute_dims is not None and \
-            'color' in points.attribute_dims, \
+               'color' in points.attribute_dims, \
             'Expect points have color attribute'
 
         # this if-expression is a bit strange
@@ -792,7 +790,7 @@ class IndoorPatchPointSample(object):
             attribute_dims.update(
                 dict(normalized_coord=[
                     attributes.shape[1], attributes.shape[1] +
-                    1, attributes.shape[1] + 2
+                                         1, attributes.shape[1] + 2
                 ]))
 
         points = np.concatenate([centered_coords, attributes], axis=1)
@@ -952,7 +950,7 @@ class BackgroundPointsFilter(object):
     def __init__(self, bbox_enlarge_range):
         assert (is_tuple_of(bbox_enlarge_range, float)
                 and len(bbox_enlarge_range) == 3) \
-            or isinstance(bbox_enlarge_range, float), \
+               or isinstance(bbox_enlarge_range, float), \
             f'Invalid arguments bbox_enlarge_range {bbox_enlarge_range}'
 
         if isinstance(bbox_enlarge_range, float):
@@ -1025,7 +1023,7 @@ class VoxelBasedPointSampler(object):
         self.time_dim = time_dim
         if prev_sweep_cfg is not None:
             assert prev_sweep_cfg['max_num_points'] == \
-                cur_sweep_cfg['max_num_points']
+                   cur_sweep_cfg['max_num_points']
             self.prev_voxel_generator = VoxelGenerator(**prev_sweep_cfg)
             self.prev_voxel_num = self.prev_voxel_generator._max_voxels
         else:
@@ -1189,7 +1187,7 @@ class PhotoMetricDistortionMultiViewImage:
         for img in imgs:
             img = img.astype(np.float32)
             assert img.dtype == np.float32, \
-                'PhotoMetricDistortion needs the input image of dtype np.float32,'\
+                'PhotoMetricDistortion needs the input image of dtype np.float32,' \
                 ' please set "to_float32=True" in "LoadImageFromFile" pipeline'
             # random brightness
             if random.randint(2):
@@ -1270,7 +1268,7 @@ class RandomScaleImageMultiViewImage(object):
             rand_scale = self.scales[0]
         else:
             rand_scale = np.random.rand() * \
-                (self.scales[1] - self.scales[0]) + self.scales[0]
+                         (self.scales[1] - self.scales[0]) + self.scales[0]
         img_shape = results['img_shape']
         y_size = int(img_shape[0] * rand_scale)
         x_size = int(img_shape[1] * rand_scale)
@@ -1666,17 +1664,58 @@ class RandomAugImageMultiViewImage(object):
     Args:
         scales
     """
-    def __init__(self, data_config=None, is_train=True, is_debug=False, is_exit=False, tmp='./figs'):
+
+    def __init__(self,
+                 data_config=None,
+                 is_train=True,
+                 is_debug=False,
+                 is_exit=False,
+                 tmp='./figs',
+                 load_point_label=False, ):
         self.data_config = data_config
         self.is_train = is_train
         self.is_debug = is_debug
         self.is_exit = is_exit
         self.tmp = tmp
+        self.load_point_label = load_point_label
 
     def random_id(self, N=8, seed=None):
         if seed is not None:
             prandom.seed(seed)
         return ''.join(prandom.choice(string.ascii_uppercase + string.digits) for _ in range(N))
+
+    def point_label_transform(self, point_label, resize, resize_dims, crop, flip, rotate):
+        H, W = resize_dims
+        point_label[:, :2] = point_label[:, :2] * resize
+        point_label[:, 0] -= crop[0]
+        point_label[:, 1] -= crop[1]
+        if flip:
+            point_label[:, 0] = resize_dims[1] - point_label[:, 0]
+
+        point_label[:, 0] -= W / 2.0
+        point_label[:, 1] -= H / 2.0
+
+        h = rotate / 180 * np.pi
+        rot_matrix = [
+            [np.cos(h), np.sin(h)],
+            [-np.sin(h), np.cos(h)],
+        ]
+        point_label[:, :2] = np.matmul(rot_matrix, point_label[:, :2].T).T
+
+        point_label[:, 0] += W / 2.0
+        point_label[:, 1] += H / 2.0
+
+        coords = point_label[:, :2].astype(np.int16)
+
+        depth_map = np.zeros(resize_dims)
+        valid_mask = ((coords[:, 1] < resize_dims[0])
+                      & (coords[:, 0] < resize_dims[1])
+                      & (coords[:, 1] >= 0)
+                      & (coords[:, 0] >= 0))
+        depth_map[coords[valid_mask, 1], coords[valid_mask, 0]] = point_label[valid_mask, 2]
+        semantic_map = np.zeros(resize_dims)
+        semantic_map[coords[valid_mask, 1], coords[valid_mask, 0]] = (point_label[valid_mask, 3] >= 0)
+        return torch.Tensor(depth_map), torch.Tensor(semantic_map)
 
     def __call__(self, results, fix=''):
         """Call function to pad images, masks, semantic segmentation maps.
@@ -1687,6 +1726,7 @@ class RandomAugImageMultiViewImage(object):
         """
         aug_imgs = []
         aug_extrinsics = []
+        gt_depth, gt_semantic = [], []  # 深度&语义标注
         for cam_id, img in enumerate(results['img']):
             pil_img = Image.fromarray(img, mode='RGB')
             resize, resize_dims, crop, flip, rotate, pad = self.sample_augmentation(
@@ -1706,9 +1746,32 @@ class RandomAugImageMultiViewImage(object):
             aug_extrinsics.append(
                 self.rts2proj(results['lidar2img']['lidar2img_aug'][cam_id], post_rot, post_tran)
             )
+
+            if self.load_point_label:
+                # 加载深度&语义标注
+                filename = results['img_info'][cam_id]['filename']
+                point_filename = filename.replace('samples/', 'samples_point_label/').replace('.jpg', '.npy')
+                point_label = np.load(point_filename).astype(np.float64)[:4].T
+                point_depth_augmented, point_semantic_augmented = \
+                    self.point_label_transform(
+                        point_label,
+                        resize,
+                        self.data_config['input_size'],
+                        crop,
+                        flip,
+                        rotate)
+                gt_depth.append(point_depth_augmented)
+                gt_semantic.append(point_semantic_augmented)
+
         results['img'] = aug_imgs
         results['lidar2img']['extrinsic'] = aug_extrinsics
         results['img_shape'] = [img.shape for img in results['img']]
+
+        if self.load_point_label:
+            # 加载深度&语义
+            results['gt_depth'] = torch.stack(gt_depth)
+            results['gt_semantic'] = torch.stack(gt_semantic)
+
         # tmp_usages for augmentated images
         if self.is_debug:
             lidar2imgs = results['lidar2img']['extrinsic']
@@ -1722,13 +1785,15 @@ class RandomAugImageMultiViewImage(object):
                 #     continue
                 try:
                     new_img = draw_lidar_bbox3d_on_img(bboxes, imgs[ii], lidar2imgs[ii], dict())
-                    img_filename = f'{self.tmp}/{bid}_imgaug_{cam_id}_{cam_type}_{ii // 6}_' + results['img_info'][ii]['filename'].split('/')[-1]
+                    img_filename = f'{self.tmp}/{bid}_imgaug_{cam_id}_{cam_type}_{ii // 6}_' + \
+                                   results['img_info'][ii]['filename'].split('/')[-1]
                     if not os.path.exists(self.tmp):
                         os.makedirs(self.tmp)
                     cv2.imwrite(img_filename, new_img)
                 except Exception:
                     new_img = imgs[ii]
-                    img_filename = f'{self.tmp}/{bid}_imgaug_{cam_id}_{cam_type}_' + results['img_info'][ii]['filename'].split('/')[-1]
+                    img_filename = f'{self.tmp}/{bid}_imgaug_{cam_id}_{cam_type}_' + \
+                                   results['img_info'][ii]['filename'].split('/')[-1]
                     if not os.path.exists(self.tmp):
                         os.makedirs(self.tmp)
                     cv2.imwrite(img_filename, new_img)
@@ -1739,7 +1804,7 @@ class RandomAugImageMultiViewImage(object):
     def sample_augmentation(self, H, W):
         if self.is_train:
             fH, fW = self.data_config['input_size']  # (640, 1600),
-            resize = float(fW)/float(W)  # 1600 / 1600
+            resize = float(fW) / float(W)  # 1600 / 1600
             resize += np.random.uniform(*self.data_config['resize'])
             resize_dims = (int(W * resize), int(H * resize))  # 900 1600
 
@@ -1756,7 +1821,7 @@ class RandomAugImageMultiViewImage(object):
             rotate = np.random.uniform(*self.data_config['rot'])
         else:
             fH, fW = self.data_config['test_input_size']
-            resize = float(fW)/float(W)
+            resize = float(fW) / float(W)
             resize += self.data_config.get('test_resize', 0.0)
             resize_dims = (int(W * resize), int(H * resize))
 
@@ -1920,7 +1985,8 @@ class InternalRandomAugImageMultiViewImageDebug(InternalRandomAugImageMultiViewI
         # ipdb.set_trace()
         ori_results = copy.deepcopy(results)
         for idx in range(self.repeat):
-            results = super(InternalRandomAugImageMultiViewImageDebug, self).__call__(copy.deepcopy(ori_results), fix=f"_{idx}")
+            results = super(InternalRandomAugImageMultiViewImageDebug, self).__call__(copy.deepcopy(ori_results),
+                                                                                      fix=f"_{idx}")
         # exit(0)
         return results
 

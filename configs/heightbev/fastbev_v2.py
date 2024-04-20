@@ -198,12 +198,16 @@ train_pipeline = [
         scale_ratio_range=[0.95, 1.05],
         translation_std=[0.05, 0.05, 0.05],
         update_img2lidar=True),
-    dict(type='RandomAugImageMultiViewImage', data_config=data_config),
+    dict(type='RandomAugImageMultiViewImage',
+         data_config=data_config,
+         is_train=True,
+         load_point_label=True,
+         ),
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='KittiSetOrigin', point_cloud_range=point_cloud_range),
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
-    dict(type='Collect3D', keys=['img', 'gt_bboxes_3d', 'gt_labels_3d'])]
+    dict(type='Collect3D', keys=['img', 'gt_bboxes_3d', 'gt_labels_3d', 'gt_depth', 'gt_semantic'])]
 
 test_pipeline = [
     dict(type='MultiViewPipeline', sequential=need_sequential, n_images=6, n_times=4, transforms=[
@@ -216,7 +220,10 @@ test_pipeline = [
         coord_type='LIDAR',
         load_dim=5,
         use_dim=5),
-    dict(type='RandomAugImageMultiViewImage', data_config=data_config, is_train=False),
+    dict(type='RandomAugImageMultiViewImage',
+         data_config=data_config,
+         is_train=False,
+         load_point_label=True, ),
     # dict(type='TestTimeAugImageMultiViewImage', data_config=data_config, is_train=False),
     dict(type='KittiSetOrigin', point_cloud_range=point_cloud_range),
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
