@@ -1,21 +1,17 @@
 # -*- coding: utf-8 -*-
-import torch
-import numpy as np
 import os
 
-from mmdet.datasets import DATASETS
-from .nuscenes_dataset import NuScenesDataset
-from .dataset_wrappers import MultiViewMixin
-from IPython import embed
-import mmcv
-import skimage.io
-import matplotlib.pyplot as plt
-import pyquaternion
-from nuscenes.utils.data_classes import Box as NuScenesBox
 import cv2
 import imageio
+import matplotlib.pyplot as plt
+import mmcv
+import numpy as np
+from IPython import embed
 from PIL import Image
-import ipdb
+from mmdet.datasets import DATASETS
+
+from .dataset_wrappers import MultiViewMixin
+from .nuscenes_dataset import NuScenesDataset
 
 
 def tofloat(x):
@@ -38,7 +34,8 @@ class NuScenesMultiViewDataset(MultiViewMixin, NuScenesDataset):
                 extrinsic=[tofloat(x) for x in data_info['lidar2img']],
                 intrinsic=np.eye(4, dtype=np.float32),
                 lidar2img_aug=data_info['lidar2img_aug'],
-                lidar2img_extra=data_info['lidar2img_extra']
+                lidar2img_extra=data_info['lidar2img_extra'],
+                bda=np.eye(4, dtype=np.float32),
             )
         )
         if 'ann_info' in data_info:
@@ -62,13 +59,13 @@ class NuScenesMultiViewDataset(MultiViewMixin, NuScenesDataset):
             box_type = type(results[i]['boxes_3d'])
             boxes_3d = results[i]['boxes_3d'].tensor
             boxes_3d = box_type(boxes_3d, box_dim=9, origin=(0.5, 0.5, 0)).convert_to(self.box_mode_3d)
-    
+
             new_results.append(dict(
                 boxes_3d=boxes_3d,
                 scores_3d=results[i]['scores_3d'],
                 labels_3d=results[i]['labels_3d']
             ))
-        
+
         vis_mode = kwargs['vis_mode'] if 'vis_mode' in kwargs else False
         if vis_mode:
             embed(header='### vis nus test data ###')
@@ -76,14 +73,14 @@ class NuScenesMultiViewDataset(MultiViewMixin, NuScenesDataset):
             self.show(new_results, 'trash/test', thr=0.3)
             print('### finish vis ###')
             exit()
-            
+
         if 'vis_mode' in kwargs.keys():
             kwargs.pop('vis_mode')
-        
+
         result_dict = super().evaluate(new_results, *args, **kwargs)
         print(result_dict)
         return result_dict
-    
+
     @staticmethod
     def draw_corners(img, corners, color, projection):
         corners_3d_4 = np.concatenate((corners, np.ones((8, 1))), axis=1)
@@ -142,43 +139,45 @@ class NuScenesMultiViewDataset(MultiViewMixin, NuScenesDataset):
             scale_fac = 10
             out_file_dir = str(i)
             ###### draw BEV pred ######
-            bev_pred_img = np.zeros((100*scale_fac, 100*scale_fac, 3))
+            bev_pred_img = np.zeros((100 * scale_fac, 100 * scale_fac, 3))
             if bev_seg_results is not None:
                 bev_pred_road, bev_pred_lane = bev_seg_results[i]['seg_pred_road'], bev_seg_results[i]['seg_pred_lane']
                 bev_pred_img = map2lssmap(bev_pred_road, bev_pred_lane)
                 bev_pred_img = mmcv.imresize(bev_pred_img,
-                                             (100*scale_fac, 100*scale_fac),
+                                             (100 * scale_fac, 100 * scale_fac),
                                              interpolation='bilinear')
-                
+
             scores = result['scores_3d'].numpy()
             try:
                 bev_box_pred = result['boxes_3d'].corners.numpy()[:, [0, 2, 6, 4]][..., :2][scores > thr]
                 labels = result['labels_3d'].numpy()[scores > thr]
                 assert bev_box_pred.shape[0] == labels.shape[0]
                 for idx in range(len(labels)):
-                    bev_pred_img = self.draw_bev_bbox_corner(bev_pred_img, bev_box_pred[idx], colors[labels[idx]], scale_fac)
+                    bev_pred_img = self.draw_bev_bbox_corner(bev_pred_img, bev_box_pred[idx], colors[labels[idx]],
+                                                             scale_fac)
             except:
                 pass
-            
+
             bev_pred_img = process_bev_res_in_front(bev_pred_img)
             imsave(os.path.join(out_dir, out_file_dir, 'bev_pred.png'), mmcv.imrescale(bev_pred_img, 0.5))
 
-            bev_gt_img = np.zeros((100*scale_fac, 100*scale_fac, 3))
+            bev_gt_img = np.zeros((100 * scale_fac, 100 * scale_fac, 3))
             if bev_seg_results is not None:
                 sample_token = self.get_data_info(i)['sample_idx']
                 bev_seg_gt = self._get_map_by_sample_token(sample_token).astype('uint8')
-                bev_gt_road, bev_gt_lane = bev_seg_gt[...,0], bev_seg_gt[...,1]
+                bev_gt_road, bev_gt_lane = bev_seg_gt[..., 0], bev_seg_gt[..., 1]
                 bev_seg_gt = map2lssmap(bev_gt_road, bev_gt_lane)
                 bev_gt_img = mmcv.imresize(
                     bev_seg_gt,
-                    (100*scale_fac, 100*scale_fac),
+                    (100 * scale_fac, 100 * scale_fac),
                     interpolation='bilinear')
             try:
                 # draw BEV GT
-                bev_gt_bboxes = gt_bboxes['gt_bboxes_3d'].corners.numpy()[:,[0,2,6,4]][..., :2]
+                bev_gt_bboxes = gt_bboxes['gt_bboxes_3d'].corners.numpy()[:, [0, 2, 6, 4]][..., :2]
                 labels_gt = gt_bboxes['gt_labels_3d']
                 for idx in range(len(labels_gt)):
-                    bev_gt_img = self.draw_bev_bbox_corner(bev_gt_img, bev_gt_bboxes[idx], colors[labels_gt[idx]], scale_fac)
+                    bev_gt_img = self.draw_bev_bbox_corner(bev_gt_img, bev_gt_bboxes[idx], colors[labels_gt[idx]],
+                                                           scale_fac)
             except:
                 pass
             bev_gt_img = process_bev_res_in_front(bev_gt_img)
@@ -196,7 +195,7 @@ class NuScenesMultiViewDataset(MultiViewMixin, NuScenesDataset):
                 camera_name = info['img_info'][j]['filename'].split('/')[-2]
                 puttext(img_pred, camera_name)
                 puttext(img_gt, camera_name)
-                
+
                 extrinsic = info['lidar2img']['extrinsic'][j]
                 intrinsic = info['lidar2img']['intrinsic'][:3, :3]
                 projection = intrinsic @ extrinsic[:3]
@@ -226,18 +225,19 @@ class NuScenesMultiViewDataset(MultiViewMixin, NuScenesDataset):
                 mmcv.mkdir_or_exist(os.path.join(out_dir, out_file_dir))
                 # 缩小image大小 可视化方便一些
                 img_gt_pred = np.concatenate([img_gt, img_pred], 0)
-                imsave(os.path.join(out_dir, out_file_dir, '{}_gt_pred.png'.format(j)), mmcv.imrescale(img_gt_pred, 0.5))
+                imsave(os.path.join(out_dir, out_file_dir, '{}_gt_pred.png'.format(j)),
+                       mmcv.imrescale(img_gt_pred, 0.5))
 
                 img_gt_list.append(mmcv.imrescale(img_gt, 0.5))
                 img_pred_list.append(mmcv.imrescale(img_pred, 0.5))
             ###### draw 3d box in image ######
             ###### generate videos step:1 ######
-            tmp_img_up_pred = np.concatenate(sort_list(img_pred_list[0:3], sort=[2,0,1]), axis=1)
-            tmp_img_bottom_pred = np.concatenate(sort_list(img_pred_list[3:], sort=[2,0,1]) ,axis=1)
+            tmp_img_up_pred = np.concatenate(sort_list(img_pred_list[0:3], sort=[2, 0, 1]), axis=1)
+            tmp_img_bottom_pred = np.concatenate(sort_list(img_pred_list[3:], sort=[2, 0, 1]), axis=1)
             tmp_img_pred = np.concatenate([tmp_img_up_pred, tmp_img_bottom_pred], axis=0)
             all_img_pred.append(tmp_img_pred)
-            tmp_img_up_gt = np.concatenate(sort_list(img_gt_list[0:3], sort=[2,0,1]),axis=1)
-            tmp_img_bottom_gt = np.concatenate(sort_list(img_gt_list[3:], sort=[2,0,1]),axis=1)
+            tmp_img_up_gt = np.concatenate(sort_list(img_gt_list[0:3], sort=[2, 0, 1]), axis=1)
+            tmp_img_bottom_gt = np.concatenate(sort_list(img_gt_list[3:], sort=[2, 0, 1]), axis=1)
             tmp_img_gt = np.concatenate([tmp_img_up_gt, tmp_img_bottom_gt], axis=0)
             all_img_gt.append(tmp_img_gt)
             ###### generate videos step:1 ######
@@ -257,8 +257,8 @@ def sort_list(_list, sort):
 
 def get_colors():
     colors = np.multiply([
-            plt.cm.get_cmap('gist_ncar', 37)((i * 7 + 5) % 37)[:3] for i in range(37)
-        ], 255).astype(np.uint8).tolist()
+        plt.cm.get_cmap('gist_ncar', 37)((i * 7 + 5) % 37)[:3] for i in range(37)
+    ], 255).astype(np.uint8).tolist()
     colors = [i[::-1] for i in colors]
     return colors
 
@@ -272,7 +272,7 @@ def imsave(img_path, img):
     mmcv.imwrite(img, img_path, auto_mkdir=True)
 
 
-def puttext(img, name, loc=(30, 60), font=cv2.FONT_HERSHEY_DUPLEX ,color=(248, 202, 105)):
+def puttext(img, name, loc=(30, 60), font=cv2.FONT_HERSHEY_DUPLEX, color=(248, 202, 105)):
     try:
         cv2.putText(img, name, loc, font, 2, color, 2)
     except:
@@ -280,12 +280,12 @@ def puttext(img, name, loc=(30, 60), font=cv2.FONT_HERSHEY_DUPLEX ,color=(248, 2
         img = np.array(img)
         cv2.putText(img, name, loc, font, 2, color, 2)
 
-        
+
 def map2lssmap(bev_map_road, bev_map_lane):
     white = [200, 200, 200]
     orange = [80, 127, 255]
     green = [171, 193, 115]
-    bev_map = np.zeros_like(bev_map_road)[:,:,None].repeat(3,-1).astype('uint8')
+    bev_map = np.zeros_like(bev_map_road)[:, :, None].repeat(3, -1).astype('uint8')
     bev_map[bev_map[:, :, 0] == 0] = white
     bev_map[bev_map_road == 1] = orange
     bev_map[bev_map_lane == 1] = green
@@ -303,13 +303,13 @@ def gen_video(img_list, bev_list, out_dir, mode='pred', fps=3):
         img = img_list[i]
         bev = bev_list[i]
         bev = draw_ego_car(bev)
-        bev = mmcv.imrescale(bev, img.shape[0]/bev.shape[0])
+        bev = mmcv.imrescale(bev, img.shape[0] / bev.shape[0])
         # img = cv2.copyMakeBorder(img, 3, 3, 3, 3, cv2.BORDER_CONSTANT, value=[255, 0, 0])
         # bev = cv2.copyMakeBorder(bev, 3, 3, 3, 3, cv2.BORDER_CONSTANT, value=[255, 0, 0])
         tmp = np.concatenate([img, bev], axis=1)
         tmp = tmp[:, :, ::-1].astype('uint8')
         tmp_list.append(tmp)
-        
+
     imageio.mimsave(out_video_path, tmp_list, fps=fps)
     print('finish video generation')
     print('video path: {}'.format(out_video_path))

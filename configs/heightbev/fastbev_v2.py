@@ -207,7 +207,9 @@ train_pipeline = [
     dict(type='KittiSetOrigin', point_cloud_range=point_cloud_range),
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
-    dict(type='Collect3D', keys=['img', 'gt_bboxes_3d', 'gt_labels_3d', 'gt_depth', 'gt_semantic'])]
+    dict(type='Collect3D',
+         keys=['img', 'gt_bboxes_3d', 'gt_labels_3d', 'gt_depth', 'gt_semantic'],
+         meta_keys=('cam_params', 'lidar2img', 'img_shape'))]
 
 test_pipeline = [
     dict(type='MultiViewPipeline', sequential=need_sequential, n_images=6, n_times=4, transforms=[
@@ -228,7 +230,7 @@ test_pipeline = [
     dict(type='KittiSetOrigin', point_cloud_range=point_cloud_range),
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
     dict(type='DefaultFormatBundle3D', class_names=class_names, with_label=False),
-    dict(type='Collect3D', keys=['img'])]
+    dict(type='Collect3D', keys=['img'], meta_keys=('cam_params', 'lidar2img', 'img_shape'))]
 
 data = dict(
     samples_per_gpu=4,

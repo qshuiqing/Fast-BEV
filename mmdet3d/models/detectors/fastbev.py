@@ -129,7 +129,7 @@ class FastBEV(BaseDetector):
                     mlvl_feats_.append(mlvl_feats[msid])
             mlvl_feats = mlvl_feats_
 
-        mlvl_feats = self.view_transformer(mlvl_feats)
+        mlvl_feats = self.view_transformer(mlvl_feats, img_metas)
 
         mlvl_volumes = []
         for lvl, mlvl_feat in enumerate(mlvl_feats):
@@ -260,11 +260,6 @@ class FastBEV(BaseDetector):
 
         else:
             bbox_results = [dict()]
-
-        # BEV semantic seg
-        if self.seg_head is not None:
-            x_bev = self.seg_head(bev_feats)
-            bbox_results[0]['bev_seg'] = x_bev
 
         return bbox_results
 

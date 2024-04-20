@@ -1428,19 +1428,22 @@ class GlobalRotScaleTrans(object):
         input_dict['pcd_scale_factor'] = scale_factor
 
     def update_transform(self, input_dict):
+
+        aug_transform = np.zeros((4, 4), dtype=np.float32)
+        if 'pcd_rotation' in input_dict:
+            aug_transform[:3, :3] = input_dict['pcd_rotation'].T * input_dict['pcd_scale_factor']
+        else:
+            aug_transform[:3, :3] = np.eye(3) * input_dict['pcd_scale_factor']
+        aug_transform[:3, -1] = input_dict['pcd_trans']
+        aug_transform[-1, -1] = 1.0
+
+        input_dict['lidar2img']['bda'] = aug_transform @ input_dict['lidar2img']['bda']
+
         for cam_id, cam_info in enumerate(input_dict['lidar2img']['lidar2img_aug']):
             transform = np.zeros((4, 4), dtype=np.float32)
             transform[:3, :3] = cam_info['rot'].copy()
             transform[:3, -1] = cam_info['tran'].copy()
             transform[-1, -1] = 1.0
-
-            aug_transform = np.zeros((4, 4), dtype=np.float32)
-            if 'pcd_rotation' in input_dict:
-                aug_transform[:3, :3] = input_dict['pcd_rotation'].T * input_dict['pcd_scale_factor']
-            else:
-                aug_transform[:3, :3] = np.eye(3) * input_dict['pcd_scale_factor']
-            aug_transform[:3, -1] = input_dict['pcd_trans']
-            aug_transform[-1, -1] = 1.0
 
             new_transform = aug_transform @ transform
             cam_info['rot'] = new_transform[:3, :3]
@@ -1619,17 +1622,20 @@ class RandomFlip3D(RandomFlip):
         return input_dict
 
     def update_transform(self, input_dict):
+
+        aug_transform = np.eye(4, dtype=np.float32)
+        if input_dict['pcd_horizontal_flip']:
+            aug_transform[1, 1] = -1
+        if input_dict['pcd_vertical_flip']:
+            aug_transform[0, 0] = -1
+
+        input_dict['lidar2img']['bda'] = aug_transform @ input_dict['lidar2img']['bda']
+
         for cam_id, cam_info in enumerate(input_dict['lidar2img']['lidar2img_aug']):
             transform = np.zeros((4, 4), dtype=np.float32)
             transform[:3, :3] = cam_info['rot'].copy()
             transform[:3, -1] = cam_info['tran'].copy()
             transform[-1, -1] = 1.0
-
-            aug_transform = np.eye(4, dtype=np.float32)
-            if input_dict['pcd_horizontal_flip']:
-                aug_transform[1, 1] = -1
-            if input_dict['pcd_vertical_flip']:
-                aug_transform[0, 0] = -1
             new_transform = aug_transform @ transform
 
             cam_info['rot'] = new_transform[:3, :3]
@@ -1727,6 +1733,7 @@ class RandomAugImageMultiViewImage(object):
         aug_imgs = []
         aug_extrinsics = []
         gt_depth, gt_semantic = [], []  # 深度&语义标注
+        rots, trans, intrinsics, post_rots, post_trans = [], [], [], [], []
         for cam_id, img in enumerate(results['img']):
             pil_img = Image.fromarray(img, mode='RGB')
             resize, resize_dims, crop, flip, rotate, pad = self.sample_augmentation(
@@ -1747,6 +1754,17 @@ class RandomAugImageMultiViewImage(object):
                 self.rts2proj(results['lidar2img']['lidar2img_aug'][cam_id], post_rot, post_tran)
             )
 
+            # 生成mlp_input
+            rot = results['lidar2img']['lidar2img_extra'][cam_id]['sensor2lidar_rotation']
+            tran = results['lidar2img']['lidar2img_extra'][cam_id]['sensor2lidar_translation']
+            intrin = results['lidar2img']['lidar2img_extra'][cam_id]['cam_intrinsic']
+            rots.append(torch.from_numpy(rot))
+            trans.append(torch.from_numpy(tran))
+            intrinsics.append(torch.from_numpy(intrin))
+
+            post_rots.append(torch.from_numpy(post_rot))
+            post_trans.append(torch.from_numpy(post_tran))
+
             if self.load_point_label:
                 # 加载深度&语义标注
                 filename = results['img_info'][cam_id]['filename']
@@ -1766,6 +1784,10 @@ class RandomAugImageMultiViewImage(object):
         results['img'] = aug_imgs
         results['lidar2img']['extrinsic'] = aug_extrinsics
         results['img_shape'] = [img.shape for img in results['img']]
+
+        results['cam_params'] = (torch.stack(rots), torch.stack(trans), torch.stack(intrinsics),
+                                 torch.stack(post_rots), torch.stack(post_trans),
+                                 torch.from_numpy(results['lidar2img']['bda']))
 
         if self.load_point_label:
             # 加载深度&语义
@@ -1901,6 +1923,9 @@ class RandomAugImageMultiViewImage(object):
     def rts2proj(self, cam_info, post_rot=None, post_tran=None):
         if cam_info is None:
             return None
+
+        cam_info['post_rot'] = post_rot
+        cam_info['post_tran'] = post_tran
 
         lidar2cam_r = np.linalg.inv(cam_info['rot'])
         lidar2cam_t = cam_info['tran'] @ lidar2cam_r.T

@@ -12,11 +12,11 @@ class HeightVT(BaseModule):
 
         self.down_sample = down_sample
 
-    def forward(self, mlvl_feats, cam_params=None):
+    def forward(self, mlvl_feats, img_meta=None):
         """
             mlvl_feats:
                 (24, 64, 64, 176), (24, 64, 32, 88), (24, 64, 16, 44)
-            cam_params:
+            img_meta:
                 rots:
                 trans:
                 intrinsics:
