@@ -129,7 +129,7 @@ class FastBEV(BaseDetector):
                     mlvl_feats_.append(mlvl_feats[msid])
             mlvl_feats = mlvl_feats_
 
-        mlvl_feats = self.view_transformer(mlvl_feats, img_metas)
+        mlvl_feats, masks, semantic = self.view_transformer(mlvl_feats, img_metas)
 
         mlvl_volumes = []
         for lvl, mlvl_feat in enumerate(mlvl_feats):
@@ -138,6 +138,9 @@ class FastBEV(BaseDetector):
             mlvl_feat = mlvl_feat.reshape([batch_size, -1] + list(mlvl_feat.shape[1:]))
             # [bs, seq*nv, c, h, w] -> list([bs, nv, c, h, w])
             mlvl_feat_split = torch.split(mlvl_feat, 6, dim=1)
+
+            # 语义掩码
+            mask = masks[lvl]  # (4, 6, 64, 64, 176)
 
             volume_list = []
             for seq_id in range(len(mlvl_feat_split)):
@@ -164,7 +167,7 @@ class FastBEV(BaseDetector):
 
                     if self.backproject == 'inplace':
                         volume = backproject_inplace(
-                            feat_i[:, :, :height, :width], points, projection)  # [c, vx, vy, vz]
+                            feat_i[:, :, :height, :width], points, projection, mask[batch_id])  # [c, vx, vy, vz]
                     else:
                         volume, valid = backproject_vanilla(
                             feat_i[:, :, :height, :width], points, projection)
@@ -219,15 +222,17 @@ class FastBEV(BaseDetector):
         else:
             x = _inner_forward(x)
 
-        return x
+        return x, semantic
 
     def forward_train(self,
                       img,
                       img_metas,
                       gt_bboxes_3d=None,
                       gt_labels_3d=None,
+                      gt_depth=None,
+                      gt_semantic=None,
                       **kwargs):
-        bev_feats = self.extract_feat(img, img_metas)
+        bev_feats, semantic = self.extract_feat(img, img_metas)
         """
         bev_feats: [(1, 256, 100, 100)]
         valids: (1, 1, 200, 200, 12)
@@ -240,6 +245,10 @@ class FastBEV(BaseDetector):
             x = self.bbox_head(bev_feats)
             loss_det = self.bbox_head.loss(*x, gt_bboxes_3d, gt_labels_3d, img_metas)
             losses.update(loss_det)
+
+        if self.view_transformer is not None:
+            loss_semantic = self.view_transformer.get_loss(semantic, gt_depth, gt_semantic)
+            losses['loss_semantic'] = loss_semantic
 
         return losses
 
@@ -340,13 +349,13 @@ def backproject_vanilla(features, points, projection):
     return volume, valid
 
 
-def backproject_inplace(features, points, projection):
+def backproject_inplace(features, points, projection, mask=None):
     '''
     function: 2d feature + predefined point cloud -> 3d volume
     input:
         features: [6, 64, 225, 400]
         points: [3, 200, 200, 12]
-        projection: [6, 3, 4]
+        projection: [6, 3, 4] mask: [6, 64, 64, 176]
     output:
         volume: [64, 200, 200, 12]
     '''
@@ -369,7 +378,8 @@ def backproject_inplace(features, points, projection):
         (n_channels, points.shape[-1]), device=features.device
     ).type_as(features)
     for i in range(n_images):
-        volume[:, valid[i]] = features[i, :, y[i, valid[i]], x[i, valid[i]]]
+        volume[:, valid[i]] = features[i, :, y[i, valid[i]], x[i, valid[i]]] * \
+                              mask[i, :, y[i, valid[i]], x[i, valid[i]]]
 
     volume = volume.view(n_channels, n_x_voxels, n_y_voxels, n_z_voxels)
     return volume

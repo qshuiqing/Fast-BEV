@@ -12,6 +12,10 @@ with_cp = False
 multi_scale_id = [0, 1, 2]  # 4x/8x/16x
 seq_times = 4 if need_sequential else 1
 
+grid_config = {
+    'depth': [1.0, 60.0, 0.5],
+}
+
 model = dict(
     type='FastBEV',
     backbone=dict(
@@ -35,8 +39,11 @@ model = dict(
     neck_fuse=dict(in_channels=[256, 192, 128], out_channels=[64, 64, 64]),
     view_transformer=dict(
         type='HeightVT',
-        down_sample=4
-    ),
+        grid_config=grid_config,
+        in_channels=64,
+        out_channels=64,
+        depthnet_cfg=dict(use_dcn=False),
+        downsample=16),
     neck_3d=dict(
         type='M2BevNeck',
         in_channels=256,
