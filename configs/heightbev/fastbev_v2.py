@@ -5,7 +5,7 @@ need_sequential = False
 
 # TTA增强
 # TestTimeAugImageMultiViewImage -> RandomAugImageMultiViewImage
-need_tta = False
+use_tta = False
 
 with_cp = False
 
@@ -123,7 +123,7 @@ model = dict(
         nms_pre=1000,
         max_num=500,
         use_scale_nms=True,
-        use_tta=True,
+        use_tta=use_tta,
         # Normal-NMS
         nms_across_levels=False,
         use_rotate_nms=True,
@@ -237,7 +237,8 @@ test_pipeline = [
     dict(type='KittiSetOrigin', point_cloud_range=point_cloud_range),
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
     dict(type='DefaultFormatBundle3D', class_names=class_names, with_label=False),
-    dict(type='Collect3D', keys=['img'], meta_keys=('cam_params', 'lidar2img', 'img_shape'))]
+    dict(type='Collect3D', keys=['img'],
+         meta_keys=('cam_params', 'lidar2img', 'img_shape', 'box_type_3d'))]
 
 data = dict(
     samples_per_gpu=4,

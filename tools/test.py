@@ -1,29 +1,29 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import argparse
-import mmcv
 import os
-import torch
 import warnings
+from os import path as osp
+
+import mmcv
+import torch
 from mmcv import Config, DictAction
 from mmcv.cnn import fuse_conv_bn
 from mmcv.parallel import MMDataParallel, MMDistributedDataParallel
 from mmcv.runner import (get_dist_info, init_dist, load_checkpoint,
                          wrap_fp16_model)
-from os import path as osp
 
 mmdet3d_root = os.environ.get('MMDET3D')
 if mmdet3d_root is not None and osp.exists(mmdet3d_root):
     import sys
+
     sys.path.insert(0, mmdet3d_root)
     print(f"using mmdet3d: {mmdet3d_root}")
 
 from mmdet3d.apis import single_gpu_test, multi_gpu_test
 from mmdet3d.datasets import build_dataloader, build_dataset
 from mmdet3d.models import build_model
-from mmdet.apis import  set_random_seed
+from mmdet.apis import set_random_seed
 from mmdet.datasets import replace_ImageToTensor
-from IPython import embed
-import ipdb
 
 
 def parse_args():
@@ -36,19 +36,19 @@ def parse_args():
         '--fuse-conv-bn',
         action='store_true',
         help='Whether to fuse conv and bn, this will slightly increase'
-        'the inference speed')
+             'the inference speed')
     parser.add_argument(
         '--format-only',
         action='store_true',
         help='Format the output results without perform evaluation. It is'
-        'useful when you want to format the result to a specific format and '
-        'submit it to the test server')
+             'useful when you want to format the result to a specific format and '
+             'submit it to the test server')
     parser.add_argument(
         '--eval',
         type=str,
         nargs='+',
         help='evaluation metrics, which depends on the dataset, e.g., "bbox",'
-        ' "segm", "proposal" for COCO, and "mAP", "recall" for PASCAL VOC')
+             ' "segm", "proposal" for COCO, and "mAP", "recall" for PASCAL VOC')
     parser.add_argument('--show', action='store_true', help='show results')
     parser.add_argument(
         '--show-dir', help='directory where results will be saved')
@@ -59,7 +59,7 @@ def parse_args():
     parser.add_argument(
         '--tmpdir',
         help='tmp directory used for collecting results from multiple '
-        'workers, available when gpu-collect is not specified')
+             'workers, available when gpu-collect is not specified')
     parser.add_argument('--seed', type=int, default=0, help='random seed')
     parser.add_argument(
         '--deterministic',
@@ -70,24 +70,24 @@ def parse_args():
         nargs='+',
         action=DictAction,
         help='override some settings in the used config, the key-value pair '
-        'in xxx=yyy format will be merged into config file. If the value to '
-        'be overwritten is a list, it should be like key="[a,b]" or key=a,b '
-        'It also allows nested list/tuple values, e.g. key="[(a,b),(c,d)]" '
-        'Note that the quotation marks are necessary and that no white space '
-        'is allowed.')
+             'in xxx=yyy format will be merged into config file. If the value to '
+             'be overwritten is a list, it should be like key="[a,b]" or key=a,b '
+             'It also allows nested list/tuple values, e.g. key="[(a,b),(c,d)]" '
+             'Note that the quotation marks are necessary and that no white space '
+             'is allowed.')
     parser.add_argument(
         '--options',
         nargs='+',
         action=DictAction,
         help='custom options for evaluation, the key-value pair in xxx=yyy '
-        'format will be kwargs for dataset.evaluate() function (deprecate), '
-        'change to --eval-options instead.')
+             'format will be kwargs for dataset.evaluate() function (deprecate), '
+             'change to --eval-options instead.')
     parser.add_argument(
         '--eval-options',
         nargs='+',
         action=DictAction,
         help='custom options for evaluation, the key-value pair in xxx=yyy '
-        'format will be kwargs for dataset.evaluate() function')
+             'format will be kwargs for dataset.evaluate() function')
     parser.add_argument(
         '--launcher',
         choices=['none', 'pytorch', 'slurm', 'mpi'],
@@ -104,9 +104,9 @@ def parse_args():
         action='store_true',
         help='whether debug')
     parser.add_argument('--debug_num', type=int, default=50)
-    
+
     parser.add_argument('--extrinsic-noise', '-n', type=float, default=0)
-    
+
     args = parser.parse_args()
     if 'LOCAL_RANK' not in os.environ:
         os.environ['LOCAL_RANK'] = str(args.local_rank)
@@ -125,7 +125,7 @@ def main():
     args = parse_args()
 
     assert args.out or args.eval or args.format_only or args.show \
-        or args.show_dir, \
+           or args.show_dir, \
         ('Please specify at least one operation (save/eval/format/show the '
          'results / save the results) with the argument "--out", "--eval"'
          ', "--format-only", "--show" or "--show-dir"')
@@ -245,8 +245,8 @@ def main():
             eval_kwargs = cfg.get('evaluation', {}).copy()
             # hard-code way to remove EvalHook args
             for key in [
-                    'interval', 'tmpdir', 'start', 'gpu_collect', 'save_best',
-                    'rule'
+                'interval', 'tmpdir', 'start', 'gpu_collect', 'save_best',
+                'rule'
             ]:
                 eval_kwargs.pop(key, None)
             eval_kwargs.update(dict(metric=args.eval, **kwargs))
