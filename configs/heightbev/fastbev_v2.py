@@ -215,7 +215,7 @@ train_pipeline = [
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
     dict(type='Collect3D',
-         keys=['img', 'gt_bboxes_3d', 'gt_labels_3d', 'gt_depth', 'gt_semantic'],
+         keys=['img', 'gt_bboxes_3d', 'gt_labels_3d', 'gt_depth', 'gt_semantic', 'canvas'],
          meta_keys=('cam_params', 'lidar2img', 'img_shape'))]
 
 test_pipeline = [

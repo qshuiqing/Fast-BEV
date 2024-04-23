@@ -9,6 +9,7 @@ from mmcv import Config
 from mmcv.parallel import MMDataParallel, scatter
 from mmcv.runner import load_checkpoint
 
+from mmdet3d.core.visualizer.image_vis import draw_lidar_bbox3d_on_img
 from mmdet3d.datasets import build_dataloader, build_dataset
 from mmdet3d.models import build_detector
 
@@ -35,7 +36,7 @@ def main():
     cfg.data.test.test_mode = True
 
     # build the dataloader
-    dataset = build_dataset(cfg.data.test)
+    dataset = build_dataset(cfg.data.train)
     data_loader = build_dataloader(
         dataset,
         samples_per_gpu=1,
@@ -63,7 +64,7 @@ def main():
             _, semantic = model.module.extract_feat(img=img, img_metas=img_metas)
 
             semantic = semantic.softmax(dim=1)
-            semantic_mask = (semantic[:, 1:2] >= 0.25)  # (6, 1, 16, 44)
+            semantic_mask = (semantic[:, 1:2] >= 0.5)  # (6, 1, 16, 44)
             semantic_mask = F.interpolate(semantic_mask.float(), scale_factor=16, mode='nearest'). \
                 bool().permute(0, 2, 3, 1).repeat(1, 1, 1, 3)  # (6, 256, 704, 3)
 
@@ -73,9 +74,11 @@ def main():
 
             canvas = canvas * semantic_mask
 
-            for img_id, canvas_img in enumerate(canvas):
-                cv2.imwrite('{}.jpg'.format(str(img_id)), canvas_img.cpu().numpy())
-
+            bboxes = data['gt_bboxes_3d'][0]
+            lidar2imgs = img_metas[0]['lidar2img']['extrinsic']
+            for ii in range(len(canvas)):
+                new_img = draw_lidar_bbox3d_on_img(bboxes, canvas[ii].cpu().numpy(), lidar2imgs[ii], dict())
+                cv2.imwrite('{}.jpg'.format(str(ii)), new_img)
         break
 
 
