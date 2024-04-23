@@ -39,11 +39,9 @@ model = dict(
     neck_fuse=dict(in_channels=[256, 192, 128], out_channels=[64, 64, 64]),
     view_transformer=dict(
         type='HeightVT',
-        grid_config=grid_config,
         in_channels=64,
         out_channels=64,
-        depthnet_cfg=dict(use_dcn=False),
-        downsample=16),
+        depthnet_cfg=dict(use_dcn=False)),
     neck_3d=dict(
         type='M2BevNeck',
         in_channels=256,
