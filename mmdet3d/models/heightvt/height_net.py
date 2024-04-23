@@ -226,7 +226,7 @@ class HeightNet(nn.Module):
         depth = self.depth_se(x, depth_se)
         depth = self.depth_conv(depth)
 
-        return torch.cat([depth, context], dim=1)
+        return depth, context
 
 
 class DepthAggregation(nn.Module):
