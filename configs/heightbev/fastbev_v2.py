@@ -12,10 +12,6 @@ with_cp = False
 multi_scale_id = [0, 1, 2]  # 4x/8x/16x
 seq_times = 4 if need_sequential else 1
 
-grid_config = {
-    'depth': [1.0, 60.0, 0.5],
-}
-
 model = dict(
     type='FastBEV',
     backbone=dict(
@@ -41,7 +37,7 @@ model = dict(
         type='HeightVT',
         in_channels=64,
         out_channels=64,
-        depthnet_cfg=dict(use_dcn=False)),
+        heightnet_cfg=dict(use_dcn=False)),
     neck_3d=dict(
         type='M2BevNeck',
         in_channels=256,
@@ -213,7 +209,7 @@ train_pipeline = [
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
     dict(type='Collect3D',
-         keys=['img', 'gt_bboxes_3d', 'gt_labels_3d', 'gt_depth', 'gt_semantic', 'canvas'],
+         keys=['img', 'gt_bboxes_3d', 'gt_labels_3d', 'gt_depth', 'gt_semantic'],
          meta_keys=('cam_params', 'lidar2img', 'img_shape'))]
 
 test_pipeline = [

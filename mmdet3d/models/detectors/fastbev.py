@@ -141,7 +141,8 @@ class FastBEV(BaseDetector):
             mlvl_feat_split = torch.split(mlvl_feat, 6, dim=1)
 
             # 语义掩码
-            mask = masks[lvl]  # (4, 6, 64, 64, 176)
+            mask = masks[lvl]  # (24, 1, 64, 176)
+            mask = mask.reshape([batch_size, -1] + list(mask.shape[1:]))  # (4, 6, 1, 64, 176)
 
             volume_list = []
             for seq_id in range(len(mlvl_feat_split)):
@@ -249,7 +250,7 @@ class FastBEV(BaseDetector):
 
         if self.view_transformer is not None:
             loss_semantic = self.view_transformer.get_loss(semantic, gt_depth, gt_semantic)
-            losses['loss_semantic'] = loss_semantic
+            losses.update(loss_semantic)
 
         return losses
 
@@ -360,9 +361,9 @@ def backproject_inplace(features, points, projection, mask=None):
     output:
         volume: [64, 200, 200, 12]
     '''
-    n_images, n_channels, height, width = features.shape
-    n_x_voxels, n_y_voxels, n_z_voxels = points.shape[-3:]
-    # [3, 200, 200, 12] -> [1, 3, 480000] -> [6, 3, 480000]
+    n_images, n_channels, height, width = features.shape  # 6, 64, 64, 176
+    n_x_voxels, n_y_voxels, n_z_voxels = points.shape[-3:]  # 200, 200, 6
+    # (3, 200, 200, 6) -> (1, 3, 240000) -> (6, 3, 240000)
     points = points.view(1, 3, -1).expand(n_images, 3, -1)
     # [6, 3, 480000] -> [6, 4, 480000]
     points = torch.cat((points, torch.ones_like(points[:, :1])), dim=1)

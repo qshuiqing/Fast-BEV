@@ -160,15 +160,18 @@ class HeightVT(BaseModule):
                  in_channels=512,
                  out_channels=64,
                  loss_semantic_weight=25,
-                 depthnet_cfg=dict(),
+                 heightnet_cfg=dict(),
                  **kwargs):
         super(HeightVT, self).__init__(**kwargs)
 
         self.out_channels = out_channels
         self.in_channels = in_channels
 
-        self.height_net = HeightNet(self.in_channels, self.in_channels,
-                                    self.out_channels, 2, **depthnet_cfg)
+        self.height_net = HeightNet(self.in_channels,
+                                    self.in_channels,
+                                    self.out_channels,
+                                    2,
+                                    **heightnet_cfg)
 
         self.loss_semantic_weight = loss_semantic_weight
 
@@ -201,7 +204,7 @@ class HeightVT(BaseModule):
         mlp_input = torch.cat([mlp_input, sensor2ego], dim=-1)
         return mlp_input
 
-    def get_downsampled_gt_depth_and_semantic(self, gt_semantics, down_sample):
+    def get_down_sampled_gt_semantic(self, gt_semantics, down_sample):
 
         B, N, H, W = gt_semantics.shape
         gt_semantics = gt_semantics.view(
@@ -223,7 +226,7 @@ class HeightVT(BaseModule):
         return gt_semantics
 
     @force_fp32()
-    def get_depth_and_semantic_loss(self, semantic_labels, semantic_preds):
+    def get_semantic_loss(self, semantic_labels, semantic_preds):
         semantic_preds = semantic_preds.permute(0, 2, 3, 1).contiguous().view(-1, 2)
         with autocast(enabled=False):
             pred = semantic_preds
@@ -249,7 +252,7 @@ class HeightVT(BaseModule):
 
             mlvl_feats[lvl] = context
 
-            semantic_mask = (semantic[:, 1:2] >= 0.5)  # 前景
+            semantic_mask = (semantic[:, 1:2] >= 1 / 2)  # 0背景,1前景
             semantic_masks.append(semantic_mask)  # 语义掩码
             semantics.append(semantic)  # 语义监督
 
@@ -257,13 +260,13 @@ class HeightVT(BaseModule):
 
     @force_fp32(apply_to='img_preds')
     def get_loss(self, img_preds, gt_depth, gt_semantic):
-        loss_semantic = dict()
+        loss_semantics = dict()
         for i, semantic in enumerate(img_preds):
-            down_sample = gt_semantic.shape[-1] / semantic.shape[-1]
-            depth_labels, semantic_labels = self.get_downsampled_gt_depth_and_semantic(gt_semantic, down_sample)
-            loss_semantic = self.get_depth_and_semantic_loss(depth_labels, semantic_labels, semantic)
-            loss_semantic['loss_semantic_{}'.format(str(i))] = loss_semantic
-        return loss_semantic
+            down_sample = int(gt_semantic.shape[-1] / semantic.shape[-1])
+            semantic_labels = self.get_down_sampled_gt_semantic(gt_semantic, down_sample)
+            loss_semantic = self.get_semantic_loss(semantic_labels, semantic)
+            loss_semantics['loss_semantic_{}'.format(i)] = loss_semantic
+        return loss_semantics
 
 
 @NECKS.register_module()
@@ -299,11 +302,11 @@ class SABEVPoolwithMSCT(HeightVT):
         depth1 = img_preds[2].softmax(1)
         semantic1 = img_preds[3].softmax(1)
         depth_labels, semantic_labels = \
-            self.get_downsampled_gt_depth_and_semantic(gt_depth, gt_semantic)
+            self.get_down_sampled_gt_semantic(gt_depth, gt_semantic)
         loss_depth0, loss_semantic0 = \
-            self.get_depth_and_semantic_loss(depth_labels, depth0, semantic_labels, semantic0)
+            self.get_semantic_loss(depth_labels, depth0, semantic_labels, semantic0)
         loss_depth1, loss_semantic1 = \
-            self.get_depth_and_semantic_loss(depth_labels, depth1, semantic_labels, semantic1)
+            self.get_semantic_loss(depth_labels, depth1, semantic_labels, semantic1)
         loss_depth = (loss_depth0 + loss_depth1) / 2
         loss_semantic = (loss_semantic0 + loss_semantic1) / 2
         return loss_depth, loss_semantic
