@@ -1782,6 +1782,7 @@ class RandomAugImageMultiViewImage(object):
                 gt_semantic.append(point_semantic_augmented)
 
         results['img'] = aug_imgs
+        results['canvas'] = aug_imgs  # 测试可视化
         results['lidar2img']['extrinsic'] = aug_extrinsics
         results['img_shape'] = [img.shape for img in results['img']]
 
