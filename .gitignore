@@ -147,6 +147,7 @@ pretrained_models
 
 # figs
 figs
+vis
 
 # mac
 .DS_Store

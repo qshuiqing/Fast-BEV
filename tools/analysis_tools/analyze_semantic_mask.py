@@ -64,13 +64,13 @@ def main():
             _, semantic = model.module.extract_feat(img=img, img_metas=img_metas)
 
             semantic = semantic.softmax(dim=1)
-            semantic_mask = (semantic[:, 1:2] >= 0.5)  # (6, 1, 16, 44)
+            semantic_mask = (semantic[:, 1:2] >= 0.25)  # (6, 1, 16, 44)
             semantic_mask = F.interpolate(semantic_mask.float(), scale_factor=16, mode='nearest'). \
                 bool().permute(0, 2, 3, 1).repeat(1, 1, 1, 3)  # (6, 256, 704, 3)
 
             canvas = torch.stack(canvas, dim=0).squeeze(1)
             for img_id, canvas_img in enumerate(canvas):
-                cv2.imwrite('o_{}.jpg'.format(str(img_id)), canvas_img.cpu().numpy())
+                cv2.imwrite('vis/{}_o_{}.jpg'.format(str(i), str(img_id)), canvas_img.cpu().numpy())
 
             canvas = canvas * semantic_mask
 
@@ -78,8 +78,7 @@ def main():
             lidar2imgs = img_metas[0]['lidar2img']['extrinsic']
             for ii in range(len(canvas)):
                 new_img = draw_lidar_bbox3d_on_img(bboxes, canvas[ii].cpu().numpy(), lidar2imgs[ii], dict())
-                cv2.imwrite('{}.jpg'.format(str(ii)), new_img)
-        break
+                cv2.imwrite('vis/{}_{}.jpg'.format(str(i), str(ii)), new_img)
 
 
 if __name__ == '__main__':
