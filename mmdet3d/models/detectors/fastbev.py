@@ -130,7 +130,7 @@ class FastBEV(BaseDetector):
                     mlvl_feats_.append(mlvl_feats[msid])
             mlvl_feats = mlvl_feats_
 
-        mlvl_feats, masks, semantic = self.view_transformer(mlvl_feats, img_metas)
+        mlvl_feats, semantic_mask, semantic = self.view_transformer(mlvl_feats, img_metas)
 
         mlvl_volumes = []
         for lvl, mlvl_feat in enumerate(mlvl_feats):
@@ -141,7 +141,9 @@ class FastBEV(BaseDetector):
             mlvl_feat_split = torch.split(mlvl_feat, 6, dim=1)
 
             # 语义掩码
-            mask = masks[lvl]  # (24, 1, 64, 176)
+            mask = semantic_mask  # (24, 1, 16, 44)
+            mask_stride = int(mlvl_feat.shape[-1] / mask.shape[-1])  # 4
+            mask = F.interpolate(mask.float(), scale_factor=mask_stride, mode='nearest').bool()  # (24, 1, 64, 176)
             mask = mask.reshape([batch_size, -1] + list(mask.shape[1:]))  # (4, 6, 1, 64, 176)
 
             volume_list = []
@@ -357,7 +359,8 @@ def backproject_inplace(features, points, projection, mask=None):
     input:
         features: [6, 64, 225, 400]
         points: [3, 200, 200, 12]
-        projection: [6, 3, 4] mask: [6, 64, 64, 176]
+        projection: [6, 3, 4]
+        mask: [6, 1, 64, 176]
     output:
         volume: [64, 200, 200, 12]
     '''
