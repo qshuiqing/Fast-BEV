@@ -157,13 +157,16 @@ class MSCThead(nn.Module):
 class HeightVT(BaseModule):
 
     def __init__(self,
+                 downsample=16,
                  in_channels=512,
                  out_channels=64,
                  loss_semantic_weight=25,
+                 grid_config=dict(depth=[1., 60.]),
                  heightnet_cfg=dict(),
                  **kwargs):
         super(HeightVT, self).__init__(**kwargs)
 
+        self.downsample = downsample
         self.out_channels = out_channels
         self.in_channels = in_channels
 
@@ -173,6 +176,7 @@ class HeightVT(BaseModule):
                                     2,
                                     **heightnet_cfg)
 
+        self.grid_config = grid_config
         self.loss_semantic_weight = loss_semantic_weight
 
     def get_mlp_input(self, rot, tran, intrin, post_rot, post_tran, bda):
@@ -204,30 +208,64 @@ class HeightVT(BaseModule):
         mlp_input = torch.cat([mlp_input, sensor2ego], dim=-1)
         return mlp_input
 
-    def get_down_sampled_gt_semantic(self, gt_semantics, down_sample):
+    def get_downsampled_gt_depth_and_semantic(self, gt_depths, gt_semantics):
+        # 过滤深度&语义 [1., 60.0]
+        gt_semantics[gt_depths < self.grid_config['depth'][0]] = 0
+        gt_semantics[gt_depths > self.grid_config['depth'][1]] = 0
+        gt_depths[gt_depths < self.grid_config['depth'][0]] = 0
+        gt_depths[gt_depths > self.grid_config['depth'][1]] = 0
 
-        B, N, H, W = gt_semantics.shape
-        gt_semantics = gt_semantics.view(
+        # 下采样downsample倍，使用one-hot生成标注 (1, 0)背景(0,1)前景
+        B, N, H, W = gt_semantics.shape  # 1, 6, 256, 704
+        gt_semantics = gt_semantics.view(  # (6, 16, 16, 44, 16, 1)
             B * N,
-            H // down_sample,
-            down_sample,
-            W // down_sample,
-            down_sample,
+            H // self.downsample,
+            self.downsample,
+            W // self.downsample,
+            self.downsample,
             1,
         )
         gt_semantics = gt_semantics.permute(0, 1, 3, 5, 2, 4).contiguous()
-        gt_semantics = gt_semantics.view(-1, down_sample * down_sample)
+        gt_semantics = gt_semantics.view(
+            -1, self.downsample * self.downsample)
         gt_semantics = torch.max(gt_semantics, dim=-1).values
-        gt_semantics = gt_semantics.view(B * N, H // down_sample,
-                                         W // down_sample)
+        gt_semantics = gt_semantics.view(B * N, H // self.downsample,
+                                         W // self.downsample)
         gt_semantics = F.one_hot(gt_semantics.long(),
                                  num_classes=2).view(-1, 2).float()
 
-        return gt_semantics
+        # 深度下采样，使用one-hot对每一个深度编码
+        B, N, H, W = gt_depths.shape  # 1, 6, 256, 704
+        gt_depths = gt_depths.view(  # (B*N, 16, 16, 44, 16, 1)
+            B * N,
+            H // self.downsample,
+            self.downsample,
+            W // self.downsample,
+            self.downsample,
+            1,
+        )
+        gt_depths = gt_depths.permute(0, 1, 3, 5, 2, 4).contiguous()
+        gt_depths = gt_depths.view(  # (16896, 256)
+            -1, self.downsample * self.downsample)
+        gt_depths_tmp = torch.where(gt_depths == 0.0,  # 为了下一步取最小深度
+                                    1e5 * torch.ones_like(gt_depths),
+                                    gt_depths)
+        gt_depths = torch.min(gt_depths_tmp, dim=-1).values  # 取最小深度
+        # gt_depths = gt_depths.view(B * N, H // self.downsample,  # (24, 16, 44)
+        #                            W // self.downsample)
+        gt_depths = torch.where(gt_depths < 1e5, gt_depths, torch.zeros_like(gt_depths))  # (24, 16, 44)
+
+        return gt_depths, gt_semantics
 
     @force_fp32()
-    def get_semantic_loss(self, semantic_labels, semantic_preds):
-        semantic_preds = semantic_preds.permute(0, 2, 3, 1).contiguous().view(-1, 2)
+    def get_depth_and_semantic_loss(self, depth_labels, semantic_labels, semantic_preds):
+        semantic_preds = semantic_preds.permute(0, 2, 3, 1).contiguous().view(-1, 2)  # (..., 2)
+
+        # 过滤非投影点
+        depth_mask = depth_labels > 0.0
+        semantic_labels = semantic_labels[depth_mask]
+        semantic_preds = semantic_preds[depth_mask]
+
         with autocast(enabled=False):
             pred = semantic_preds
             target = semantic_labels
@@ -241,31 +279,24 @@ class HeightVT(BaseModule):
         return self.loss_semantic_weight * semantic_loss
 
     def forward(self, mlvl_feats, img_metas):
-
         cam_params = [torch.stack(params) for params in zip(*[meta['cam_params'] for meta in img_metas])]
-        mlp_input = self.get_mlp_input(*cam_params).to(device=mlvl_feats[0].device, dtype=torch.float)
+        mlp_input = self.get_mlp_input(*cam_params).to(device=mlvl_feats[0].device, dtype=torch.float)  # (4, 6, 30)
 
-        semantics, semantic_masks = [], []
-        for lvl, feats in enumerate(mlvl_feats):
-            semantic, context = self.height_net(feats, mlp_input)
-            semantic = semantic.softmax(dim=1)
+        semantic, _ = self.height_net(mlvl_feats[-1], mlp_input)  # (24, 2, 16, 44)
+        semantic = semantic.softmax(dim=1)
 
-            mlvl_feats[lvl] = context
+        semantic_mask = (semantic[:, 1:2] >= 1 / 2)  # (24, 1, 16, 44)0背景,1前景
 
-            semantic_mask = (semantic[:, 1:2] >= 1 / 2)  # 0背景,1前景
-            semantic_masks.append(semantic_mask)  # 语义掩码
-            semantics.append(semantic)  # 语义监督
-
-        return mlvl_feats, semantic_masks, semantics
+        return semantic_mask, semantic
 
     @force_fp32(apply_to='img_preds')
     def get_loss(self, img_preds, gt_depth, gt_semantic):
+        semantic = img_preds  # (24, 2, 16, 44)
+        gt_depths, semantic_labels = self.get_downsampled_gt_depth_and_semantic(gt_depth, gt_semantic)
+
         loss_semantics = dict()
-        for i, semantic in enumerate(img_preds):
-            down_sample = int(gt_semantic.shape[-1] / semantic.shape[-1])
-            semantic_labels = self.get_down_sampled_gt_semantic(gt_semantic, down_sample)
-            loss_semantic = self.get_semantic_loss(semantic_labels, semantic)
-            loss_semantics['loss_semantic_{}'.format(i)] = loss_semantic
+        loss_semantic = self.get_depth_and_semantic_loss(gt_depths, semantic_labels, semantic)
+        loss_semantics['loss_semantic'] = loss_semantic
         return loss_semantics
 
 

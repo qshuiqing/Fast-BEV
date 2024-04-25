@@ -91,9 +91,9 @@ class FastBEV(BaseDetector):
         return torch.stack(projection)
 
     def extract_feat(self, img, img_metas=None):
-        batch_size = img.shape[0]
-        img = img.reshape([-1] + list(img.shape)[2:])  # [1, 6, 3, 928, 1600] -> [6, 3, 928, 1600]
-        x = self.backbone(img)  # [6, 256, 232, 400]; [6, 512, 116, 200]; [6, 1024, 58, 100]; [6, 2048, 29, 50]
+        batch_size = img.shape[0]  # 4
+        img = img.reshape([-1] + list(img.shape)[2:])  # (4, 6, 3, 256, 704) -> (24, 3, 256, 704)
+        x = self.backbone(img)  # (24, 256*i, 64/i, 176/i),i=1,2,4,8
 
         # fuse features
         def _inner_forward(x):
@@ -130,7 +130,7 @@ class FastBEV(BaseDetector):
                     mlvl_feats_.append(mlvl_feats[msid])
             mlvl_feats = mlvl_feats_
 
-        mlvl_feats, masks, semantic = self.view_transformer(mlvl_feats, img_metas)
+        semantic_mask, semantic = self.view_transformer(mlvl_feats, img_metas)
 
         mlvl_volumes = []
         for lvl, mlvl_feat in enumerate(mlvl_feats):
@@ -141,7 +141,9 @@ class FastBEV(BaseDetector):
             mlvl_feat_split = torch.split(mlvl_feat, 6, dim=1)
 
             # 语义掩码
-            mask = masks[lvl]  # (24, 1, 64, 176)
+            mask = semantic_mask  # (24, 1, 16, 44)
+            mask_stride = int(mlvl_feat.shape[-1] / mask.shape[-1])  # 4
+            mask = F.interpolate(mask.float(), scale_factor=mask_stride, mode='nearest').bool()  # (24, 1, 64, 176)
             mask = mask.reshape([batch_size, -1] + list(mask.shape[1:]))  # (4, 6, 1, 64, 176)
 
             volume_list = []
@@ -357,7 +359,8 @@ def backproject_inplace(features, points, projection, mask=None):
     input:
         features: [6, 64, 225, 400]
         points: [3, 200, 200, 12]
-        projection: [6, 3, 4] mask: [6, 64, 64, 176]
+        projection: [6, 3, 4]
+        mask: [6, 1, 64, 176]
     output:
         volume: [64, 200, 200, 12]
     '''
@@ -383,5 +386,5 @@ def backproject_inplace(features, points, projection, mask=None):
         volume[:, valid[i]] = features[i, :, y[i, valid[i]], x[i, valid[i]]] * \
                               mask[i, :, y[i, valid[i]], x[i, valid[i]]]
 
-    volume = volume.view(n_channels, n_x_voxels, n_y_voxels, n_z_voxels)
+    volume = volume.view(n_channels, n_x_voxels, n_y_voxels, n_z_voxels)  # (64, 200, 200, 6)
     return volume
