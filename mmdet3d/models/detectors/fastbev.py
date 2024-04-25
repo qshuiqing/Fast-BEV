@@ -91,9 +91,9 @@ class FastBEV(BaseDetector):
         return torch.stack(projection)
 
     def extract_feat(self, img, img_metas=None):
-        batch_size = img.shape[0]
-        img = img.reshape([-1] + list(img.shape)[2:])  # [1, 6, 3, 928, 1600] -> [6, 3, 928, 1600]
-        x = self.backbone(img)  # [6, 256, 232, 400]; [6, 512, 116, 200]; [6, 1024, 58, 100]; [6, 2048, 29, 50]
+        batch_size = img.shape[0]  # 4
+        img = img.reshape([-1] + list(img.shape)[2:])  # (4, 6, 3, 256, 704) -> (24, 3, 256, 704)
+        x = self.backbone(img)  # (24, 256*i, 64/i, 176/i),i=1,2,4,8
 
         # fuse features
         def _inner_forward(x):
@@ -130,7 +130,7 @@ class FastBEV(BaseDetector):
                     mlvl_feats_.append(mlvl_feats[msid])
             mlvl_feats = mlvl_feats_
 
-        mlvl_feats, semantic_mask, semantic = self.view_transformer(mlvl_feats, img_metas)
+        semantic_mask, semantic = self.view_transformer(mlvl_feats, img_metas)
 
         mlvl_volumes = []
         for lvl, mlvl_feat in enumerate(mlvl_feats):
@@ -386,5 +386,5 @@ def backproject_inplace(features, points, projection, mask=None):
         volume[:, valid[i]] = features[i, :, y[i, valid[i]], x[i, valid[i]]] * \
                               mask[i, :, y[i, valid[i]], x[i, valid[i]]]
 
-    volume = volume.view(n_channels, n_x_voxels, n_y_voxels, n_z_voxels)
+    volume = volume.view(n_channels, n_x_voxels, n_y_voxels, n_z_voxels)  # (64, 200, 200, 6)
     return volume

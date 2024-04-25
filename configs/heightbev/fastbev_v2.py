@@ -335,7 +335,7 @@ log_config = dict(
         dict(type='TensorboardLoggerHook'),
     ])
 dist_params = dict(backend='nccl')
-find_unused_parameters = True  # todo: fix number of FPN outputs
+# find_unused_parameters = True  # fix number of FPN outputs
 log_level = 'INFO'
 
 load_from = 'ckpts/cascade_mask_rcnn_r50_fpn_coco-mstrain_3x_20e_nuim_bbox_mAP_0.5400_segm_mAP_0.4300.pth'

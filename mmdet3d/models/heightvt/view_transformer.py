@@ -236,7 +236,7 @@ class HeightVT(BaseModule):
 
         # 深度下采样，使用one-hot对每一个深度编码
         B, N, H, W = gt_depths.shape  # 1, 6, 256, 704
-        gt_depths = gt_depths.view(
+        gt_depths = gt_depths.view(  # (B*N, 16, 16, 44, 16, 1)
             B * N,
             H // self.downsample,
             self.downsample,
@@ -245,24 +245,24 @@ class HeightVT(BaseModule):
             1,
         )
         gt_depths = gt_depths.permute(0, 1, 3, 5, 2, 4).contiguous()
-        gt_depths = gt_depths.view(
+        gt_depths = gt_depths.view(  # (16896, 256)
             -1, self.downsample * self.downsample)
         gt_depths_tmp = torch.where(gt_depths == 0.0,  # 为了下一步取最小深度
                                     1e5 * torch.ones_like(gt_depths),
                                     gt_depths)
         gt_depths = torch.min(gt_depths_tmp, dim=-1).values  # 取最小深度
-        gt_depths = gt_depths.view(B * N, H // self.downsample,
-                                   W // self.downsample)
-        gt_depths = torch.where(gt_depths < 1e5, gt_depths, torch.zeros_like(gt_depths))
+        # gt_depths = gt_depths.view(B * N, H // self.downsample,  # (24, 16, 44)
+        #                            W // self.downsample)
+        gt_depths = torch.where(gt_depths < 1e5, gt_depths, torch.zeros_like(gt_depths))  # (24, 16, 44)
 
         return gt_depths, gt_semantics
 
     @force_fp32()
     def get_depth_and_semantic_loss(self, depth_labels, semantic_labels, semantic_preds):
-        semantic_preds = semantic_preds.permute(0, 2, 3, 1).contiguous().view(-1, 2)
+        semantic_preds = semantic_preds.permute(0, 2, 3, 1).contiguous().view(-1, 2)  # (..., 2)
 
         # 过滤非投影点
-        depth_mask = torch.max(depth_labels, dim=1).values > 0.0
+        depth_mask = depth_labels > 0.0
         semantic_labels = semantic_labels[depth_mask]
         semantic_preds = semantic_preds[depth_mask]
 
@@ -280,18 +280,18 @@ class HeightVT(BaseModule):
 
     def forward(self, mlvl_feats, img_metas):
         cam_params = [torch.stack(params) for params in zip(*[meta['cam_params'] for meta in img_metas])]
-        mlp_input = self.get_mlp_input(*cam_params).to(device=mlvl_feats[0].device, dtype=torch.float)
+        mlp_input = self.get_mlp_input(*cam_params).to(device=mlvl_feats[0].device, dtype=torch.float)  # (4, 6, 30)
 
-        semantic, _ = self.height_net(mlvl_feats[-1], mlp_input)
+        semantic, _ = self.height_net(mlvl_feats[-1], mlp_input)  # (24, 2, 16, 44)
         semantic = semantic.softmax(dim=1)
 
-        semantic_mask = (semantic[:, 1:2] >= 1 / 2)  # 0背景,1前景
+        semantic_mask = (semantic[:, 1:2] >= 1 / 2)  # (24, 1, 16, 44)0背景,1前景
 
-        return mlvl_feats, semantic_mask, semantic
+        return semantic_mask, semantic
 
     @force_fp32(apply_to='img_preds')
     def get_loss(self, img_preds, gt_depth, gt_semantic):
-        semantic = img_preds
+        semantic = img_preds  # (24, 2, 16, 44)
         gt_depths, semantic_labels = self.get_downsampled_gt_depth_and_semantic(gt_depth, gt_semantic)
 
         loss_semantics = dict()
