@@ -1,13 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import numpy as np
 from mmcv.parallel import DataContainer as DC
+from mmdet.datasets.builder import PIPELINES
+from mmdet.datasets.pipelines import to_tensor
 
 from mmdet3d.core.bbox import BaseInstance3DBoxes
 from mmdet3d.core.points import BasePoints
-from mmdet.datasets.builder import PIPELINES
-from mmdet.datasets.pipelines import to_tensor
-from IPython import embed
-import ipdb
 
 PIPELINES._module_dict.pop('DefaultFormatBundle')
 
@@ -53,9 +51,9 @@ class DefaultFormatBundle(object):
                 img = np.ascontiguousarray(results['img'].transpose(2, 0, 1))
                 results['img'] = DC(to_tensor(img), stack=True)
         for key in [
-                'proposals', 'gt_bboxes', 'gt_bboxes_ignore', 'gt_labels',
-                'gt_labels_3d', 'attr_labels', 'pts_instance_mask',
-                'pts_semantic_mask', 'centers2d', 'depths', 'gt_bev_seg'
+            'proposals', 'gt_bboxes', 'gt_bboxes_ignore', 'gt_labels',
+            'gt_labels_3d', 'attr_labels', 'pts_instance_mask',
+            'pts_semantic_mask', 'centers2d', 'depths', 'gt_bev_seg'
         ]:
             if key not in results:
                 continue
@@ -189,7 +187,10 @@ class DefaultFormatBundle3D(DefaultFormatBundle):
     - gt_labels: (1)to tensor, (2)to DataContainer
     """
 
-    def __init__(self, class_names, with_gt=True, with_label=True):
+    def __init__(self,
+                 class_names,
+                 with_gt=True,
+                 with_label=True):
         super(DefaultFormatBundle3D, self).__init__()
         self.class_names = class_names
         self.with_gt = with_gt

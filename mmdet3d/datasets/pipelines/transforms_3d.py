@@ -1736,10 +1736,13 @@ class RandomAugImageMultiViewImage(object):
         rots, trans, intrinsics, post_rots, post_trans = [], [], [], [], []
         for cam_id, img in enumerate(results['img']):
             pil_img = Image.fromarray(img, mode='RGB')
+
+            # 生成增强参数，尺寸变更为最终的输入尺寸(256, 704)
             resize, resize_dims, crop, flip, rotate, pad = self.sample_augmentation(
                 H=pil_img.height,
                 W=pil_img.width,
             )
+
             post_pil_img, post_rot, post_tran = self.img_transform(
                 pil_img, torch.eye(2), torch.zeros(2),
                 resize=resize,
@@ -1826,21 +1829,21 @@ class RandomAugImageMultiViewImage(object):
 
     def sample_augmentation(self, H, W):
         if self.is_train:
-            fH, fW = self.data_config['input_size']  # (640, 1600),
+            fH, fW = self.data_config['input_size']  # (256, 704)
             resize = float(fW) / float(W)  # 1600 / 1600
             resize += np.random.uniform(*self.data_config['resize'])
             resize_dims = (int(W * resize), int(H * resize))  # 900 1600
 
-            newW, newH = resize_dims  # 1600 900
-            crop_h_start = (newH - fH) // 2  # (900 - 640)  // 2 = 130
-            crop_w_start = (newW - fW) // 2  # 1600 1600
+            newW, newH = resize_dims  # 增强后尺寸
+            crop_h_start = (newH - fH) // 2  # 取增强后尺寸与最终尺寸差值的一半作为起始裁剪点
+            crop_w_start = (newW - fW) // 2  #
             crop_h_start += int(np.random.uniform(*self.data_config['crop']) * fH)
             crop_w_start += int(np.random.uniform(*self.data_config['crop']) * fW)
-
-            # (0, 130, 1600, 130+640)
+            # 图片裁剪
             crop = (crop_w_start, crop_h_start, crop_w_start + fW, crop_h_start + fH)
-
+            # 图片是否反转
             flip = self.data_config['flip'] and np.random.choice([0, 1])
+            # 图片旋转
             rotate = np.random.uniform(*self.data_config['rot'])
         else:
             fH, fW = self.data_config['test_input_size']
@@ -1853,12 +1856,13 @@ class RandomAugImageMultiViewImage(object):
             crop_w_start = (newW - fW) // 2
             crop = (crop_w_start, crop_h_start, crop_w_start + fW, crop_h_start + fH)
 
-            flip = self.data_config['test_flip']
-            rotate = self.data_config['test_rotate']
+            flip = self.data_config['test_flip']  # False
+            rotate = self.data_config['test_rotate']  # 0.0
 
-        pad_data = self.data_config['pad']
-        pad_divisor = self.data_config['pad_divisor']
-        pad_color = self.data_config['pad_color']
+        # 无需padding
+        pad_data = self.data_config['pad']  # (0, 0, 0, 0)
+        pad_divisor = self.data_config['pad_divisor']  # 32
+        pad_color = self.data_config['pad_color']  # (0, 0, 0)
         pad = (pad_data, pad_color)
 
         return resize, resize_dims, crop, flip, rotate, pad
@@ -1866,12 +1870,13 @@ class RandomAugImageMultiViewImage(object):
     def img_transform(self, img, post_rot, post_tran,
                       resize, resize_dims, crop,
                       flip, rotate, pad):
+        # 对原始图片处理，生成增强后图片
         img = self.img_transform_core(img, resize_dims, crop, flip, rotate, pad)
 
         post_rot *= resize
         post_tran -= torch.Tensor(crop[:2])
         if flip:
-            A = torch.Tensor([[-1, 0], [0, 1]])
+            A = torch.Tensor([[-1, 0], [0, 1]])  # A * (x, y) = (-x, y) 反转
             b = torch.Tensor([crop[2] - crop[0], 0])
             post_rot = A.matmul(post_rot)
             post_tran = A.matmul(post_tran) + b
@@ -1892,15 +1897,15 @@ class RandomAugImageMultiViewImage(object):
         return img, ret_post_rot, ret_post_tran
 
     def img_transform_core(self, img, resize_dims, crop, flip, rotate, pad):
-        img = img.resize(resize_dims)
-        img = img.crop(crop)
-        if flip:
+        img = img.resize(resize_dims)  # 图片缩放
+        img = img.crop(crop)  # 图片裁剪
+        if flip:  # 图片翻转
             img = img.transpose(method=Image.FLIP_LEFT_RIGHT)
-        img = img.rotate(rotate)
+        img = img.rotate(rotate)  # 图片旋转
 
         top, right, bottom, left = pad[0]
         pad_color = pad[1]
-        img = self.img_pad(img, top, right, bottom, left, pad_color)
+        img = self.img_pad(img, top, right, bottom, left, pad_color)  # 图片填充 X
         return img
 
     def img_pad(self, pil_img, top, right, bottom, left, color):

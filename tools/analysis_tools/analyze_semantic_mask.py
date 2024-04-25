@@ -66,24 +66,23 @@ def main():
             img, img_metas, canvas = data['img'], data['img_metas'], data['canvas']
             _, semantic = model.module.extract_feat(img=img, img_metas=img_metas)
 
-            for sem_i, sem in enumerate(semantic):
-                semantic_mask = (sem[:, 1:2] >= 1 / 2)  # (6, 1, 64, 176)
-                stride = int(img.shape[-1] / semantic_mask.shape[-1])  # 4, 8, 16
-                semantic_mask = F.interpolate(semantic_mask.float(), scale_factor=stride, mode='nearest'). \
-                    bool().permute(0, 2, 3, 1)  # (6, 256, 704, 1)
+            semantic_mask = (semantic[:, 1:2] >= 0.25)  # (6, 1, 16, 44)
+            stride = int(img.shape[-1] / semantic_mask.shape[-1])  # 16
+            semantic_mask = F.interpolate(semantic_mask.float(), scale_factor=stride, mode='nearest'). \
+                bool().permute(0, 2, 3, 1)  # (6, 256, 704, 1)
 
-                _canvas = torch.stack(canvas, dim=0).squeeze(1)
-                for img_id, canvas_img in enumerate(_canvas):
-                    cv2.imwrite('vis/{}/{}_{}_o.jpg'.format(sample_id, sem_i, img_id), canvas_img.cpu().numpy())
+            _canvas = torch.stack(canvas, dim=0).squeeze(1)
+            for img_id, canvas_img in enumerate(_canvas):
+                cv2.imwrite('vis/{}/{}_o.jpg'.format(sample_id, img_id), canvas_img.cpu().numpy())
 
-                _canvas = _canvas * semantic_mask
+            _canvas = _canvas * semantic_mask
 
-                bboxes = data['gt_bboxes_3d'][0]
-                lidar2imgs = img_metas[0]['lidar2img']['extrinsic']
-                for img_id in range(len(_canvas)):
-                    new_img = draw_lidar_bbox3d_on_img(bboxes, _canvas[img_id].cpu().numpy(), lidar2imgs[img_id],
-                                                       dict())
-                    cv2.imwrite('vis/{}/{}_{}.jpg'.format(sample_id, sem_i, img_id), new_img)
+            bboxes = data['gt_bboxes_3d'][0]
+            lidar2imgs = img_metas[0]['lidar2img']['extrinsic']
+            for img_id in range(len(_canvas)):
+                new_img = draw_lidar_bbox3d_on_img(bboxes, _canvas[img_id].cpu().numpy(), lidar2imgs[img_id],
+                                                   dict())
+                cv2.imwrite('vis/{}/{}.jpg'.format(sample_id, img_id), new_img)
 
 
 if __name__ == '__main__':

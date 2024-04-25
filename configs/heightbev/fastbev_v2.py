@@ -207,7 +207,7 @@ train_pipeline = [
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='KittiSetOrigin', point_cloud_range=point_cloud_range),
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
-    dict(type='DefaultFormatBundle3D', class_names=class_names),
+    dict(type='DefaultFormatBundle3D', class_names=class_names),  # label->index
     dict(type='Collect3D',
          keys=['img', 'gt_bboxes_3d', 'gt_labels_3d', 'gt_depth', 'gt_semantic'],
          meta_keys=('cam_params', 'lidar2img', 'img_shape'))]

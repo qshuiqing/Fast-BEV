@@ -160,6 +160,7 @@ class HeightVT(BaseModule):
                  downsample=16,
                  in_channels=512,
                  out_channels=64,
+                 semantic_threshold=0.25,
                  loss_semantic_weight=25,
                  grid_config=dict(depth=[1., 60.]),
                  heightnet_cfg=dict(),
@@ -177,6 +178,7 @@ class HeightVT(BaseModule):
                                     **heightnet_cfg)
 
         self.grid_config = grid_config
+        self.semantic_threshold = semantic_threshold
         self.loss_semantic_weight = loss_semantic_weight
 
     def get_mlp_input(self, rot, tran, intrin, post_rot, post_tran, bda):
@@ -285,7 +287,7 @@ class HeightVT(BaseModule):
         semantic, _ = self.height_net(mlvl_feats[-1], mlp_input)  # (24, 2, 16, 44)
         semantic = semantic.softmax(dim=1)
 
-        semantic_mask = (semantic[:, 1:2] >= 1 / 2)  # (24, 1, 16, 44)0背景,1前景
+        semantic_mask = (semantic[:, 1:2] >= self.semantic_threshold)  # (24, 1, 16, 44)0背景,1前景
 
         return semantic_mask, semantic
 
