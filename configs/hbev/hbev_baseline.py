@@ -72,7 +72,6 @@ model = dict(
         is_transpose=False,
         fuse=dict(in_channels=64 * 1 * 6 * 3, out_channels=256),  # c*seq*h*fpn_lvl
         norm_cfg=dict(type='BN', requires_grad=True)),
-    seg_head=None,
     bbox_head=dict(
         type='FreeAnchor3DHead',
         is_transpose=True,

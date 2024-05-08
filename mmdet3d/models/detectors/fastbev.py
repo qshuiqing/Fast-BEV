@@ -1,16 +1,13 @@
 # -*- coding: utf-8 -*-
 import copy
 import math
-import os
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as cp
-from mmcv.runner import get_dist_info, auto_fp16
 from mmdet.models import DETECTORS, build_backbone, build_head, build_neck
 from mmdet.models.detectors import BaseDetector
-from mmseg.models import build_head as build_seg_head
 from mmseg.ops import resize
 
 from mmdet3d.core import bbox3d2result
@@ -25,7 +22,6 @@ class FastBEV(BaseDetector):
             neck_fuse,
             neck_3d,
             bbox_head,
-            seg_head,
             n_voxels,
             voxel_size,
             bbox_head_2d=None,
@@ -33,7 +29,6 @@ class FastBEV(BaseDetector):
             test_cfg=None,
             train_cfg_2d=None,
             test_cfg_2d=None,
-            pretrained=None,
             init_cfg=None,
             extrinsic_noise=0,
             seq_detach=False,
@@ -73,11 +68,6 @@ class FastBEV(BaseDetector):
         else:
             self.bbox_head = None
 
-        if seg_head is not None:
-            self.seg_head = build_seg_head(seg_head)
-        else:
-            self.seg_head = None
-
         if bbox_head_2d is not None:
             bbox_head_2d.update(train_cfg=train_cfg_2d)
             bbox_head_2d.update(test_cfg=test_cfg_2d)
@@ -115,36 +105,21 @@ class FastBEV(BaseDetector):
                 projection.append(intrinsic @ extrinsic[:3])
         return torch.stack(projection)
 
-    def extract_feat(self, img, img_metas, mode):
-        batch_size = img.shape[0]
-        img = img.reshape(
-            [-1] + list(img.shape)[2:]
-        )  # [1, 6, 3, 928, 1600] -> [6, 3, 928, 1600]
-        x = self.backbone(
-            img
-        )  # [6, 256, 232, 400]; [6, 512, 116, 200]; [6, 1024, 58, 100]; [6, 2048, 29, 50]
-
-        # use for vovnet
-        if isinstance(x, dict):
-            tmp = []
-            for k in x.keys():
-                tmp.append(x[k])
-            x = tmp
+    def extract_feat(self, img, img_metas=None):
+        batch_size = img.shape[0]  # 4
+        img = img.reshape([-1] + list(img.shape)[2:])  # (4, 6, 3, 256, 704) -> (24, 3, 256, 704)
+        x = self.backbone(img)  # [24, 256, 64, 176]; [24, 512, 32, 88]; [24, 1024, 16, 44]; [24, 2048, 8, 22]
 
         # fuse features
         def _inner_forward(x):
             out = self.neck(x)
-            return out  # [6, 64, 232, 400]; [6, 64, 116, 200]; [6, 64, 58, 100]; [6, 64, 29, 50])
+            return out  # [24, 256, 64, 176]; [24, 512, 32, 88]; [24, 1024, 16, 44]; [24, 2048, 8, 22]
 
         if self.with_cp and x.requires_grad:
             mlvl_feats = cp.checkpoint(_inner_forward, x)
         else:
             mlvl_feats = _inner_forward(x)
         mlvl_feats = list(mlvl_feats)
-
-        features_2d = None
-        if self.bbox_head_2d:
-            features_2d = mlvl_feats
 
         if self.multi_scale_id is not None:
             mlvl_feats_ = []
@@ -169,14 +144,9 @@ class FastBEV(BaseDetector):
                 else:
                     mlvl_feats_.append(mlvl_feats[msid])
             mlvl_feats = mlvl_feats_
-        # v3 bev ms
-        if isinstance(self.n_voxels, list) and len(mlvl_feats) < len(self.n_voxels):
-            pad_feats = len(self.n_voxels) - len(mlvl_feats)
-            for _ in range(pad_feats):
-                mlvl_feats.append(mlvl_feats[0])
 
         mlvl_volumes = []
-        for lvl, mlvl_feat in enumerate(mlvl_feats):
+        for lvl, mlvl_feat in enumerate(mlvl_feats):  # 3
             stride_i = math.ceil(img.shape[-1] / mlvl_feat.shape[-1])  # P4 880 / 32 = 27.5
             # [bs*seq*nv, c, h, w] -> [bs, seq*nv, c, h, w]
             mlvl_feat = mlvl_feat.reshape([batch_size, -1] + list(mlvl_feat.shape[1:]))
@@ -184,9 +154,9 @@ class FastBEV(BaseDetector):
             mlvl_feat_split = torch.split(mlvl_feat, 6, dim=1)
 
             volume_list = []
-            for seq_id in range(len(mlvl_feat_split)):
+            for seq_id in range(len(mlvl_feat_split)):  # 1
                 volumes = []
-                for batch_id, seq_img_meta in enumerate(img_metas):
+                for batch_id, seq_img_meta in enumerate(img_metas):  # 4
                     feat_i = mlvl_feat_split[seq_id][batch_id]  # [nv, c, h, w]
                     img_meta = copy.deepcopy(seq_img_meta)
                     img_meta["lidar2img"]["extrinsic"] = img_meta["lidar2img"]["extrinsic"][seq_id * 6:(seq_id + 1) * 6]
@@ -198,12 +168,8 @@ class FastBEV(BaseDetector):
 
                     projection = self._compute_projection(
                         img_meta, stride_i, noise=self.extrinsic_noise).to(feat_i.device)
-                    if self.style in ['v1', 'v2']:
-                        # wo/ bev ms
-                        n_voxels, voxel_size = self.n_voxels[0], self.voxel_size[0]
-                    else:
-                        # v3/v4 bev ms
-                        n_voxels, voxel_size = self.n_voxels[lvl], self.voxel_size[lvl]
+                    # v4 bev ms
+                    n_voxels, voxel_size = self.n_voxels[lvl], self.voxel_size[lvl]
                     points = get_points(  # [3, vx, vy, vz]
                         n_voxels=torch.tensor(n_voxels),
                         voxel_size=torch.tensor(voxel_size),
@@ -223,39 +189,36 @@ class FastBEV(BaseDetector):
                         volume[:, ~valid[0]] = 0.0
 
                     volumes.append(volume)
-                volume_list.append(torch.stack(volumes))  # list([bs, c, vx, vy, vz])
+                volume_list.append(torch.stack(volumes))  # seq x list([bs, c, vx, vy, vz])
 
-            mlvl_volumes.append(torch.cat(volume_list, dim=1))  # list([bs, seq*c, vx, vy, vz])
+            mlvl_volumes.append(torch.cat(volume_list, dim=1))  # lvl x list([bs, seq*c, vx, vy, vz])
 
-        if self.style in ['v1', 'v2']:
-            mlvl_volumes = torch.cat(mlvl_volumes, dim=1)  # [bs, lvl*seq*c, vx, vy, vz]
-        else:
             # bev ms: multi-scale bev map (different x/y/z)
-            for i in range(len(mlvl_volumes)):
-                mlvl_volume = mlvl_volumes[i]
-                bs, c, x, y, z = mlvl_volume.shape
-                # collapse h, [bs, seq*c, vx, vy, vz] -> [bs, seq*c*vz, vx, vy]
-                mlvl_volume = mlvl_volume.permute(0, 2, 3, 4, 1).reshape(bs, x, y, z * c).permute(0, 3, 1, 2)
+        for i in range(len(mlvl_volumes)):  # 3
+            mlvl_volume = mlvl_volumes[i]
+            bs, c, x, y, z = mlvl_volume.shape
+            # collapse h, [bs, seq*c, vx, vy, vz] -> [bs, seq*c*vz, vx, vy]
+            mlvl_volume = mlvl_volume.permute(0, 2, 3, 4, 1).reshape(bs, x, y, z * c).permute(0, 3, 1, 2)
 
-                # different x/y, [bs, seq*c*vz, vx, vy] -> [bs, seq*c*vz, vx', vy']
-                if self.multi_scale_3d_scaler == 'pool' and i != (len(mlvl_volumes) - 1):
-                    # pooling to bottom level
-                    mlvl_volume = F.adaptive_avg_pool2d(mlvl_volume, mlvl_volumes[-1].size()[2:4])
-                elif self.multi_scale_3d_scaler == 'upsample' and i != 0:
-                    # upsampling to top level 
-                    mlvl_volume = resize(
-                        mlvl_volume,
-                        mlvl_volumes[0].size()[2:4],
-                        mode='bilinear',
-                        align_corners=False)
-                else:
-                    # same x/y
-                    pass
+            # different x/y, [bs, seq*c*vz, vx, vy] -> [bs, seq*c*vz, vx', vy']
+            if self.multi_scale_3d_scaler == 'pool' and i != (len(mlvl_volumes) - 1):
+                # pooling to bottom level
+                mlvl_volume = F.adaptive_avg_pool2d(mlvl_volume, mlvl_volumes[-1].size()[2:4])
+            elif self.multi_scale_3d_scaler == 'upsample' and i != 0:
+                # upsampling to top level
+                mlvl_volume = resize(
+                    mlvl_volume,
+                    mlvl_volumes[0].size()[2:4],
+                    mode='bilinear',
+                    align_corners=False)
+            else:
+                # same x/y
+                pass
 
-                # [bs, seq*c*vz, vx', vy'] -> [bs, seq*c*vz, vx, vy, 1]
-                mlvl_volume = mlvl_volume.unsqueeze(-1)
-                mlvl_volumes[i] = mlvl_volume
-            mlvl_volumes = torch.cat(mlvl_volumes, dim=1)  # [bs, z1*c1+z2*c2+..., vx, vy, 1]
+            # [bs, seq*c*vz, vx', vy'] -> [bs, seq*c*vz, vx, vy, 1]
+            mlvl_volume = mlvl_volume.unsqueeze(-1)
+            mlvl_volumes[i] = mlvl_volume
+        mlvl_volumes = torch.cat(mlvl_volumes, dim=1)  # [bs, z1*c1+z2*c2+..., vx, vy, 1]
 
         x = mlvl_volumes
 
@@ -270,31 +233,7 @@ class FastBEV(BaseDetector):
         else:
             x = _inner_forward(x)
 
-        return x, None, features_2d
-
-    @auto_fp16(apply_to=('img',))
-    def forward(self, img, img_metas, return_loss=True, **kwargs):
-        """Calls either :func:`forward_train` or :func:`forward_test` depending
-        on whether ``return_loss`` is ``True``.
-
-        Note this setting will change the expected inputs. When
-        ``return_loss=True``, img and img_meta are single-nested (i.e. Tensor
-        and List[dict]), and when ``resturn_loss=False``, img and img_meta
-        should be double nested (i.e.  List[Tensor], List[List[dict]]), with
-        the outer list indicating test time augmentations.
-        """
-        if torch.onnx.is_in_onnx_export():
-            if kwargs["export_2d"]:
-                return self.onnx_export_2d(img, img_metas)
-            elif kwargs["export_3d"]:
-                return self.onnx_export_3d(img, img_metas)
-            else:
-                raise NotImplementedError
-
-        if return_loss:
-            return self.forward_train(img, img_metas, **kwargs)
-        else:
-            return self.forward_test(img, img_metas, **kwargs)
+        return x
 
     def forward_train(self,
                       img,
@@ -315,45 +254,13 @@ class FastBEV(BaseDetector):
         Returns:
             损失值
         """
-        feature_bev, valids, features_2d = self.extract_feat(img, img_metas, "train")
-        """
-        feature_bev: [(1, 256, 100, 100)]
-        valids: (1, 1, 200, 200, 12)
-        features_2d: [[6, 64, 232, 400], [6, 64, 116, 200], [6, 64, 58, 100], [6, 64, 29, 50]]
-        """
-        assert self.bbox_head is not None or self.seg_head is not None
+        feature_bev = self.extract_feat(img, img_metas)
 
         losses = dict()
-        if self.bbox_head is not None:
+        if self.bbox_head is not None:  # FreeAnchor3DHead
             x = self.bbox_head(feature_bev)
             loss_det = self.bbox_head.loss(*x, gt_bboxes_3d, gt_labels_3d, img_metas)
             losses.update(loss_det)
-
-        if self.bbox_head_2d is not None:
-            gt_bboxes = kwargs["gt_bboxes"][0]
-            gt_labels = kwargs["gt_labels"][0]
-            assert len(kwargs["gt_bboxes"]) == 1 and len(kwargs["gt_labels"]) == 1
-            # hack a img_metas_2d
-            img_metas_2d = []
-            img_info = img_metas[0]["img_info"]
-            for idx, info in enumerate(img_info):
-                tmp_dict = dict(
-                    filename=info["filename"],
-                    ori_filename=info["filename"].split("/")[-1],
-                    ori_shape=img_metas[0]["ori_shape"],
-                    img_shape=img_metas[0]["img_shape"],
-                    pad_shape=img_metas[0]["pad_shape"],
-                    scale_factor=img_metas[0]["scale_factor"],
-                    flip=False,
-                    flip_direction=None,
-                )
-                img_metas_2d.append(tmp_dict)
-
-            rank, world_size = get_dist_info()
-            loss_2d = self.bbox_head_2d.forward_train(
-                features_2d, img_metas_2d, gt_bboxes, gt_labels
-            )
-            losses.update(loss_2d)
 
         return losses
 
@@ -362,63 +269,8 @@ class FastBEV(BaseDetector):
             return self.simple_test(img, img_metas)
         return self.aug_test(img, img_metas)
 
-    def onnx_export_2d(self, img, img_metas):
-        """
-        input: 6, 3, 544, 960
-        output: 6, 64, 136, 240
-        """
-        x = self.backbone(img)
-        c1, c2, c3, c4 = self.neck(x)
-        c2 = resize(
-            c2, size=c1.size()[2:], mode="bilinear", align_corners=False
-        )  # [6, 64, 232, 400]
-        c3 = resize(
-            c3, size=c1.size()[2:], mode="bilinear", align_corners=False
-        )  # [6, 64, 232, 400]
-        c4 = resize(
-            c4, size=c1.size()[2:], mode="bilinear", align_corners=False
-        )  # [6, 64, 232, 400]
-        x = torch.cat([c1, c2, c3, c4], dim=1)
-        x = self.neck_fuse(x)
-
-        if bool(os.getenv("DEPLOY", False)):
-            x = x.permute(0, 2, 3, 1)
-            return x
-
-        return x
-
-    def onnx_export_3d(self, x, _):
-        # x: [6, 200, 100, 3, 256]
-        # if bool(os.getenv("DEPLOY_DEBUG", False)):
-        #     x = x.sum(dim=0, keepdim=True)
-        #     return [x]
-        if self.style == "v1":
-            x = x.sum(dim=0, keepdim=True)  # [1, 200, 100, 3, 256]
-            x = self.neck_3d(x)  # [[1, 256, 100, 50], ]
-        elif self.style == "v2":
-            x = self.neck_3d(x)  # [6, 256, 100, 50]
-            x = [x[0].sum(dim=0, keepdim=True)]  # [1, 256, 100, 50]
-        elif self.style == "v3":
-            x = self.neck_3d(x)  # [1, 256, 100, 50]
-        else:
-            raise NotImplementedError
-
-        if self.bbox_head is not None:
-            cls_score, bbox_pred, dir_cls_preds = self.bbox_head(x)
-            cls_score = [item.sigmoid() for item in cls_score]
-
-        if os.getenv("DEPLOY", False):
-            if dir_cls_preds is None:
-                x = [cls_score, bbox_pred]
-            else:
-                x = [cls_score, bbox_pred, dir_cls_preds]
-            return x
-
-        return x
-
     def simple_test(self, img, img_metas):
-        bbox_results = []
-        feature_bev, _, features_2d = self.extract_feat(img, img_metas, "test")
+        feature_bev = self.extract_feat(img, img_metas)
         if self.bbox_head is not None:
             x = self.bbox_head(feature_bev)
             bbox_list = self.bbox_head.get_bboxes(*x, img_metas, valid=None)
@@ -429,11 +281,6 @@ class FastBEV(BaseDetector):
 
         else:
             bbox_results = [dict()]
-
-        # BEV semantic seg
-        if self.seg_head is not None:
-            x_bev = self.seg_head(feature_bev)
-            bbox_results[0]['bev_seg'] = x_bev
 
         return bbox_results
 
@@ -448,7 +295,7 @@ class FastBEV(BaseDetector):
             img_metas[0]['lidar2img']['extrinsic'] = extrinsic_copy[24 * tta_id:24 * (tta_id + 1)]
             img_metas_list.append(img_metas)
 
-            feature_bev, _, _ = self.extract_feat(imgs[:, 24 * tta_id:24 * (tta_id + 1)], img_metas, "test")
+            feature_bev = self.extract_feat(imgs[:, 24 * tta_id:24 * (tta_id + 1)], img_metas)
             x = self.bbox_head(feature_bev)
             x_list.append(x)
 
