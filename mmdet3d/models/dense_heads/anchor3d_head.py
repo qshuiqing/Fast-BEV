@@ -437,7 +437,7 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
         assert len(cls_scores) == len(bbox_preds)
         assert len(cls_scores) == len(dir_cls_preds)
         num_levels = len(cls_scores)
-        featmap_sizes = [cls_scores[i].shape[-2:] for i in range(num_levels)]
+        featmap_sizes = [cls_scores[i].shape[-2:] for i in range(num_levels)]  # (100, 100)
         device = cls_scores[0].device
         mlvl_anchors = self.anchor_generator.grid_anchors(
             featmap_sizes, device=device)
@@ -447,7 +447,7 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
 
         result_list = []
         for img_id in range(len(input_metas)):
-            cls_score_list = [
+            cls_score_list = [  # 1 x (80, 100, 100)
                 cls_scores[i][img_id].detach() for i in range(num_levels)
             ]
             bbox_pred_list = [
@@ -540,8 +540,8 @@ class Anchor3DHead(BaseModule, AnchorTrainMixin):
             mlvl_scores = torch.cat([mlvl_scores, padding], dim=1)
 
         score_thr = cfg.get('score_thr', 0)
-        if cfg.get('use_scale_nms', False):
-            mlvl_bboxes_for_nms = input_meta['box_type_3d'](mlvl_bboxes, box_dim=self.box_code_size).bev
+        if cfg.get('use_scale_nms', False):  # True
+            mlvl_bboxes_for_nms = input_meta['box_type_3d'](mlvl_bboxes, box_dim=self.box_code_size).bev  # (1000, 5)
             results = box3d_multiclass_scale_nms(mlvl_bboxes, mlvl_bboxes_for_nms,
                                                  mlvl_scores, score_thr, cfg.max_num,
                                                  cfg, mlvl_dir_scores)

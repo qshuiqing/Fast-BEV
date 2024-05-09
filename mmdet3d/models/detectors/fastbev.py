@@ -37,6 +37,7 @@ class FastBEV(BaseDetector):
             with_cp=False,
             backproject='inplace',
             style='v4',
+            **kwargs
     ):
         super().__init__(init_cfg=init_cfg)
         self.backbone = build_backbone(backbone)
@@ -270,9 +271,9 @@ class FastBEV(BaseDetector):
         return self.aug_test(img, img_metas)
 
     def simple_test(self, img, img_metas):
-        feature_bev = self.extract_feat(img, img_metas)
+        feature_bev = self.extract_feat(img, img_metas)  # 1 x (1, 256, 100, 100)
         if self.bbox_head is not None:
-            x = self.bbox_head(feature_bev)
+            x = self.bbox_head(feature_bev)  # FreeAnchor3DHead
             bbox_list = self.bbox_head.get_bboxes(*x, img_metas, valid=None)
             bbox_results = [
                 bbox3d2result(det_bboxes, det_scores, det_labels)
